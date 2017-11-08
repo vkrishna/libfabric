@@ -268,7 +268,7 @@ char *util_get_adapter_name(const struct fi_provider *prov,
 }
 
 char *util_get_subnet_name(const struct fi_provider *prov,
-				  struct fi_info *info)
+			   struct fi_info *info)
 {
 	struct sockaddr *addr;
 	int ret;

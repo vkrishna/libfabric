@@ -69,7 +69,7 @@ static int tcpx_fabric_close(fid_t fid)
 
 	if(tcpx_fabric->conn_mgr_thread &&
 	   pthread_join(tcpx_fabric->conn_mgr_thread, NULL))
-		FI_DBG(&tcpx_prov, FI_LOG_FABRIC,
+		FI_WARN(&tcpx_prov, FI_LOG_FABRIC,
 		       "cm thread failed to join\n");
 	while (!dlist_empty(&tcpx_fabric->fd_list)) {
 		fd_entry = tcpx_fabric->fd_list.next;
@@ -82,7 +82,6 @@ static int tcpx_fabric_close(fid_t fid)
 
 	fastlock_destroy(&tcpx_fabric->fd_list_lock);
 	fd_signal_free(&tcpx_fabric->signal);
-
 	free(tcpx_fabric);
 	return 0;
 }
@@ -95,108 +94,6 @@ struct fi_ops tcpx_fabric_fi_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
-static int poll_fd_data_alloc(struct poll_fd_data *pf_data, int size)
-{
-	struct pollfd *new_poll_fds;
-	struct poll_fd_info *new_fd_info;
-
-	new_poll_fds = calloc(size,
-			      sizeof(*new_poll_fds));
-	new_fd_info = calloc(size,
-			     sizeof(*new_fd_info));
-	if (!new_poll_fds || !new_fd_info)
-		return -FI_ENOMEM;
-
-	pf_data->max_nfds = size;
-	memcpy(new_poll_fds, pf_data->poll_fds,
-	       pf_data->max_nfds*sizeof(*new_poll_fds));
-	free(pf_data->poll_fds);
-	pf_data->poll_fds = new_poll_fds;
-
-	memcpy(new_fd_info, pf_data->fd_info,
-	       pf_data->max_nfds*sizeof(*new_fd_info));
-	free(pf_data->fd_info);
-	pf_data->fd_info = new_fd_info;
-
-	return 0;
-}
-
-static void poll_fds_swap_del_last(int index,
-				struct poll_fd_data *pf_data)
-{
-	pf_data->poll_fds[index] = pf_data->poll_fds[(pf_data->nfds)-1];
-	pf_data->fd_info[index] = pf_data->fd_info[(pf_data->nfds)-1];
-	pf_data->nfds--;
-}
-
-static int poll_fds_find_dup(struct poll_fd_data *pf_data,
-			      struct poll_fd_info *fd_info_entry)
-{
-	struct tcpx_ep *tcpx_ep;
-	struct tcpx_pep *tcpx_pep;
-	int i;
-
-	for (i = 1 ; i < pf_data->nfds ; i++) {
-
-		switch (fd_info_entry->fid->fclass) {
-		case FI_CLASS_EP:
-			tcpx_ep = container_of(fd_info_entry->fid, struct tcpx_ep,
-					       util_ep.ep_fid.fid);
-			if (pf_data->poll_fds[i].fd == tcpx_ep->conn_fd)
-				return i;
-			break;
-		case FI_CLASS_PEP:
-			tcpx_pep = container_of(fd_info_entry->fid, struct tcpx_pep,
-						util_pep.pep_fid.fid);
-			if (pf_data->poll_fds[i].fd == tcpx_pep->sock)
-				return i;
-			break;
-		default:
-			continue;
-		}
-	}
-	return -1;
-}
-
-static int poll_fds_add_item(struct poll_fd_data *pf_data,
-			      struct poll_fd_info *fd_info_entry)
-{
-	struct tcpx_ep *tcpx_ep;
-	struct tcpx_pep *tcpx_pep;
-	int ret = FI_SUCCESS;
-
-	if (pf_data->nfds >= pf_data->max_nfds) {
-		ret = poll_fd_data_alloc(pf_data, pf_data->max_nfds*2);
-		FI_WARN(&tcpx_prov, FI_LOG_EP_CTRL,
-			"memory allocation failed\n");
-		goto out;
-	}
-
-	pf_data->fd_info[pf_data->nfds] = *fd_info_entry;
-
-	switch (fd_info_entry->fid->fclass) {
-	case FI_CLASS_EP:
-		tcpx_ep = container_of(fd_info_entry->fid, struct tcpx_ep,
-				       util_ep.ep_fid.fid);
-		pf_data->poll_fds[pf_data->nfds].fd = tcpx_ep->conn_fd;
-		pf_data->poll_fds[pf_data->nfds].events = POLLOUT;
-		break;
-	case FI_CLASS_PEP:
-		tcpx_pep = container_of(fd_info_entry->fid, struct tcpx_pep,
-				       util_pep.pep_fid.fid);
-
-		pf_data->poll_fds[pf_data->nfds].fd = tcpx_pep->sock;
-		pf_data->poll_fds[pf_data->nfds].events = POLLIN;
-		break;
-	default:
-		FI_WARN(&tcpx_prov, FI_LOG_EP_CTRL,
-			"invalid fd\n");
-		ret = -FI_EINVAL;
-	}
-	pf_data->nfds++;
-out:
-	return ret;
-}
 
 static int handle_fd_list(struct tcpx_fabric *tcpx_fabric,
 			   struct poll_fd_data *pf_data)
@@ -371,6 +268,7 @@ static void *tcpx_conn_mgr_thread(void *data)
 		handle_fd_events(tcpx_fabric, &pf_data);
 	}
 out:
+	poll_fd_data_free(pf_data);
 	return NULL;
 }
 

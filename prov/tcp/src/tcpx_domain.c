@@ -51,12 +51,18 @@ static struct fi_ops_domain tcpx_domain_ops = {
 static int tcpx_domain_close(fid_t fid)
 {
 	int ret;
-	struct util_domain *domain;
-	domain = container_of(fid, struct util_domain, domain_fid.fid);
-	ret = ofi_domain_close(domain);
+	struct tcpx_domain *tcpx_domain;
+	tcpx_domain = container_of(fid, struct tcpx_domain,
+				   util_domain.domain_fid.fid);
+	ret = ofi_domain_close(&tcpx_domain->util_domain);
 	if (ret)
 		return ret;
-	free(domain);
+
+	ret = tcpx_progress_close(tcpx_domain);
+	if (ret)
+		return ret;
+
+	free(tcpx_domain);
 	return 0;
 }
 
@@ -71,23 +77,34 @@ static struct fi_ops tcpx_domain_fi_ops = {
 int tcpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 		     struct fid_domain **domain, void *context)
 {
-	struct util_domain *util_domain;
+	struct tcpx_domain *tcpx_domain;
 	int ret;
 
 	ret = ofi_prov_check_info(&tcpx_util_prov, fabric->api_version, info);
 	if (ret)
 		return ret;
 
-	util_domain = calloc(1, sizeof(*util_domain));
-	if (!util_domain)
+	tcpx_domain = calloc(1, sizeof(*tcpx_domain));
+	if (!tcpx_domain)
 		return -FI_ENOMEM;
 
-	ret = ofi_domain_init(fabric, info, util_domain, context);
+	ret = ofi_domain_init(fabric, info, &tcpx_domain->util_domain, context);
 	if (ret)
 		return ret;
 
-	*domain = &util_domain->domain_fid;
+	*domain = &tcpx_domain->util_domain.domain_fid;
 	(*domain)->fid.ops = &tcpx_domain_fi_ops;
 	(*domain)->ops = &tcpx_domain_ops;
+
+	/* todo initializa progress */
+	tcpx_domain->progress = tcpx_progress_init(tcpx_domain);
+	if (!tcpx_domain->progress) {
+		ret = -FI_EINVAL
+		goto out:
+	}
 	return 0;
+out:
+	ofi_domain_close(&tcpx_domain->util_domain);
+	free(tcpx_domain);
+	return ret;
 }
