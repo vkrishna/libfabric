@@ -96,11 +96,10 @@ int tcpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
 	(*domain)->fid.ops = &tcpx_domain_fi_ops;
 	(*domain)->ops = &tcpx_domain_ops;
 
-	/* todo initializa progress */
 	tcpx_domain->progress = tcpx_progress_init(tcpx_domain);
 	if (!tcpx_domain->progress) {
-		ret = -FI_EINVAL
-		goto out:
+		ret = -FI_EINVAL;
+		goto out;
 	}
 	return 0;
 out:

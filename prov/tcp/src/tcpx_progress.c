@@ -55,22 +55,52 @@ int tcpx_progress_close(struct tcpx_domain *domain)
 
 	progress->do_progress = 0;
 	if (progress->progress_thread &&
-	    pthread_join(&progress->progress_thread, NULL)) {
+	    pthread_join(progress->progress_thread, NULL)) {
 		FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,
 		       "progress thread failed to join\n");
 	}
 	fd_signal_free(&progress->signal);
 	poll_fd_data_free(progress->pf_data);
-	pthread_mutex_destroy(&progress->list_lock);
+	util_buf_pool_destroy(progress->rx_entry_pool);
+	util_buf_pool_destroy(progress->pe_pool);
+	pthread_mutex_destroy(&progress->ep_list_lock);
 	fastlock_destroy(&progress->signal_lock);
 	fastlock_destroy(&progress->lock);
-	free(progress)
+	free(progress);
 	return FI_SUCCESS;
 }
 
-int tcpx_progress_signal(struct tcpx_progress *progress)
+void tcpx_progress_signal(struct tcpx_progress *progress)
 {
 	fd_signal_set(&progress->signal);
+}
+
+static struct tcpx_pe_entry *get_new_pe_entry(struct tcpx_progress *progress)
+{
+	struct dlist_entry *entry;
+	struct tcpx_pe_entry *pe_entry;
+	static uint64_t pool_list_id = 0;
+
+	if (dlist_empty(&progress->free_list)) {
+		pe_entry = util_buf_alloc(progress->pe_pool);
+		if (pe_entry) {
+			memset(pe_entry, 0, sizeof(*pe_entry));
+			pe_entry->is_pool_entry = 1;
+			pe_entry->pool_list_id = pool_list_id++;
+			if (ofi_rbinit(&pe_entry->comm_buf, TCPX_PE_COMM_BUFF_SZ))
+				FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,"failed to init comm-cache\n");
+			pe_entry->cache_sz = TCPX_PE_COMM_BUFF_SZ;
+			dlist_insert_tail(&pe_entry->entry, &progress->pool_list);
+		}
+	} else {
+		entry = progress->free_list.next;
+		dlist_remove(entry);
+		dlist_insert_tail(entry, &progress->busy_list);
+		pe_entry = container_of(entry, struct tcpx_pe_entry, ep_entry);
+		assert(ofi_rbempty(&pe_entry->comm_buf));
+		memset(pe_entry, 0, sizeof(*pe_entry));
+	}
+	return pe_entry;
 }
 
 static inline ssize_t tcpx_pe_send_field(struct tcpx_pe_entry *pe_entry,
@@ -119,6 +149,56 @@ static inline ssize_t tcpx_pe_recv_field(struct tcpx_pe_entry *pe_entry,
 	return (ret == field_rem_len) ? 0 : -1;
 }
 
+/* to do : needs to be verified */
+static void report_pe_entry_completion(struct tcpx_pe_entry *pe_entry)
+{
+	struct tcpx_ep *ep = pe_entry->ep;
+
+	if (pe_entry->flags & TCPX_NO_COMPLETION) {
+		return;
+	}
+
+	switch (pe_entry->msg_hdr.op_data) {
+	case TCPX_OP_MSG_SEND:
+		if (ep->util_ep.tx_cq) {
+			ofi_cq_write(ep->util_ep.tx_cq,
+				     pe_entry->context,
+				     pe_entry->flags,
+				     0, NULL,
+				     pe_entry->msg_hdr.data, 0);
+		}
+
+		if (ep->util_ep.tx_cntr) {
+			ep->util_ep.tx_cntr->cntr_fid.ops->add(&ep->util_ep.tx_cntr->cntr_fid, 1);
+		}
+		break;
+	case TCPX_OP_MSG_RECV:
+		if (ep->util_ep.rx_cq) {
+			ofi_cq_write(ep->util_ep.rx_cq,
+				     pe_entry->context,
+				     pe_entry->flags,
+				     0, NULL,
+				     pe_entry->msg_hdr.data, 0);
+		}
+
+		if (ep->util_ep.rx_cntr) {
+			ep->util_ep.rx_cntr->cntr_fid.ops->add(&ep->util_ep.rx_cntr->cntr_fid, 1);
+		}
+		break;
+	}
+}
+
+static void release_pe_entry(struct tcpx_pe_entry *pe_entry)
+{
+
+	//to do ; fill in details
+
+	/* if (pe_entry->is_pool_entry) { */
+	/* 	util_buf_release(progress->pe_pool, pe_entry); */
+	/* } */
+
+}
+
 static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 {
 
@@ -140,7 +220,8 @@ static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 	if (TCPX_XFER_HDR_SENT == pe_entry->state) {
 		field_offset += sizeof(pe_entry->msg_hdr);
 		for (i = 0 ; i < pe_entry->iov_count ; i++) {
-			if (0 != tcpx_pe_send_field(pe_entry, pe_entry->iov[i].iov.addr,
+			if (0 != tcpx_pe_send_field(pe_entry,
+						    (char *) (uintptr_t)pe_entry->iov[i].iov.addr,
 						    pe_entry->iov[i].iov.len,
 						    field_offset)) {
 				break;
@@ -153,9 +234,9 @@ static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 	}
 
 	if (TCPX_XFER_FLUSH_COMM_BUF == pe_entry->state) {
-		if (!ofi_rbempty(pe_entry->comm_buf)) {
+		if (!ofi_rbempty(&pe_entry->comm_buf)) {
 			/* flush until comm buffer is empty */
-			tcpx_comm_flush();
+			/* tcpx_comm_flush(); */
 		} else {
 			if (pe_entry->wait_for_resp)
 				pe_entry->state = TCPX_XFER_WAIT_FOR_ACK;
@@ -163,14 +244,18 @@ static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 	}
 
 	if (TCPX_XFER_COMPLETE == pe_entry->state) {
-		/* remove the pe entry from the list */
-		/* write completion to the CQ? */
+		/* remove it from the list */
+		dlist_remove(&pe_entry->ep_entry);
+		report_pe_entry_completion(pe_entry);
+		release_pe_entry(pe_entry);
+
 	}
 }
 
 static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 {
 	size_t field_offset;
+	int i;
 
 	if (TCPX_XFER_STARTED == pe_entry->state) {
 		field_offset = 0;
@@ -190,7 +275,8 @@ static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 		case TCPX_OP_MSG_SEND:
 			field_offset += sizeof(pe_entry->msg_hdr);
 			for (i = 0 ; i < pe_entry->iov_count ; i++) {
-				if (0 != tcpx_pe_recv_field(pe_entry, pe_entry->iov[i].iov.addr,
+				if (0 != tcpx_pe_recv_field(pe_entry,
+							    (char *) (uintptr_t)pe_entry->iov[i].iov.addr,
 							    pe_entry->iov[i].iov.len,
 							    field_offset)) {
 					break;
@@ -199,20 +285,19 @@ static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 			}
 
 			if (pe_entry->done_len == pe_entry->total_len)
-				if (pe_entry->msg_hdr.flags & FI_INJECT)
+				if (pe_entry->msg_hdr.flags & FI_INJECT) {
 					pe_entry->state = TCPX_XFER_COMPLETE;
-				else
+				} else {
 					pe_entry->state = TCPX_XFER_WAIT_SENDING_ACK;
+				}
 			break;
 		case TCPX_OP_MSG_SEND_COMPLETE:
 			field_offset += sizeof(pe_entry->msg_hdr);
 			if (0 == tcpx_pe_recv_field(pe_entry, &pe_entry->msg_resp,
 						    sizeof(pe_entry->msg_resp),
 						    field_offset)) {
-
-				/* to do :mark the the send pe complete */
-
 				pe_entry->state = TCPX_XFER_COMPLETE;
+
 			}
 			break;
 		default:
@@ -230,46 +315,35 @@ static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 	}
 
 	if (TCPX_XFER_COMPLETE == pe_entry->state) {
+		/* remove it from the list */
+		dlist_remove(&pe_entry->ep_entry);
+		report_pe_entry_completion(pe_entry);
+		release_pe_entry(pe_entry);
 
 	}
 }
 
-static void process_rx_pe_list(struct tcpx_ep *ep)
+static void process_pe_lists(struct tcpx_ep *ep)
 {
 	struct tcpx_pe_entry *pe_entry;
 	struct dlist_entry *entry;
 
-	if (dlist_empty(ep->rx_pe_entry_list))
-		return ;
+	if (dlist_empty(&ep->rx_pe_entry_list))
+		goto rx_pe_list;
 
 	entry = ep->rx_pe_entry_list.next;
 	pe_entry = container_of(entry, struct tcpx_pe_entry,
 				ep_entry);
 	process_rx_pe_entry(pe_entry);
 
-	if (pe_entry->state == TCPX_XFER_COMPLETE) {
-		/* remove it from the list */
-		dlist_remove(entry, &ep->rx_pe_list);
-	}
-}
-
-static void process_tx_pe_list(struct tcpx_ep *ep)
-{
-	struct tcpx_pe_entry *pe_entry;
-	struct dlist_entry *entry;
-
-	if (dlist_empty(ep->tx_pe_entry_list))
+rx_pe_list:
+	if (dlist_empty(&ep->tx_pe_entry_list))
 		return ;
 
 	entry = ep->tx_pe_entry_list.next;
 	pe_entry = container_of(entry, struct tcpx_pe_entry,
 				ep_entry);
 	process_tx_pe_entry(pe_entry);
-
-	if (pe_entry->state == TCPX_XFER_COMPLETE) {
-		/* remove it from the list */
-		dlist_remove(entry, &ep->tx_pe_list);
-	}
 }
 
 static void process_ep_rx_requests(struct tcpx_progress *progress)
@@ -281,55 +355,29 @@ static void process_ep_rx_requests(struct tcpx_progress *progress)
 	struct poll_fd_info *fd_info;
 
 	for (i = 1; i < pf_data->nfds ; i++) {
-		if (pf_data->poll_fds[i].revents & POLLIN) {
-
-			fd_info = pf_data->fd_info;
-			ep = container_of(fd_info->fid, struct tcpx_ep,
-					  util_ep.ep_fid.fid);
-
-			/* create new pe_entry  */
-			pe_entry = get_new_pe_entry(progress);
-			if (!pe_entry) {
-				FI_WARN(&tcpx_prov, FI_LOG_EP_DATA,
-					"failed to allocate pe entry")
-				goto err;
-			}
-
-			pe_entry->state = TCPX_XFER_STARTED;
-			pe_entry->ep = ep;
-
-			/* add it to ep rx pe entry list */
-			dlist_insert_tail(pe_entry->ep_entry, &ep->rx_pe_list);
+		if (!pf_data->poll_fds[i].revents & POLLIN) {
+			continue;
 		}
+		fd_info = pf_data->fd_info;
+		ep = container_of(fd_info->fid, struct tcpx_ep,
+				  util_ep.ep_fid.fid);
+
+		/* create new pe_entry  */
+		pe_entry = get_new_pe_entry(progress);
+		if (!pe_entry) {
+			FI_WARN(&tcpx_prov, FI_LOG_EP_DATA,
+				"failed to allocate pe entry")
+				goto err;
+		}
+
+		pe_entry->state = TCPX_XFER_STARTED;
+		pe_entry->ep = ep;
+
+		/* add it to ep rx pe entry list */
+		dlist_insert_tail(pe_entry->ep_entry, &ep->rx_pe_list);
 	}
 err:
 	return;
-}
-
-static struct tcpx_pe_entry *get_new_pe_entry(struct tcpx_progress *progress)
-{
-	struct dlist_entry *entry;
-	struct tcpx_pe_entry *pe_entry;
-
-	if (dlist_empty(&progress->free_list)) {
-		pe_entry = util_buf_alloc(progress->pe_pool);
-		if (pe_entry) {
-			memset(pe_entry, 0, sizeof(*pe_entry));
-			pe_entry->is_pool_entry = 1;
-			if (ofi_rbinit(&pe_entry->comm_buf, TCPX_PE_COMM_BUFF_SZ))
-				FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,"failed to init comm-cache\n");
-			pe_entry->cache_sz = TCPX_PE_COMM_BUFF_SZ;
-			dlist_insert_tail(&pe_entry->entry, &progress->pool_list);
-		}
-	} else {
-		entry = progress->free_list.next;
-		dlist_remove(entry);
-		dlist_insert_tail(entry, &progress->busy_list);
-		pe_entry = container_of(entry, struct tcpx_pe_entry, ep_entry);
-		assert(ofi_rbempty(&pe_entry->comm_buf));
-		memset(pe_entry, 0, sizeof(*pe_entry));
-	}
-	return pe_entry;
 }
 
 static void process_ep_tx_requests(struct tcpx_progress *progress,
@@ -351,33 +399,41 @@ static void process_ep_tx_requests(struct tcpx_progress *progress,
 
 		ofi_rbread(&ep->rb, &pe_entry->msg_hdr.op_data,
 			   sizeof(pe_entry->msg_hdr.op_data));
-		ofi_rbread(&ep->rb, &pe_entry->pe.tx_iov_cnt,
-			   sizeof(pe_entry->pe.tx_iov_cnt));
-		ofi_rbread(&tcpx_ep->rb, &pe_entry->flags,
+		ofi_rbread(&ep->rb, &pe_entry->iov_cnt,
+			   sizeof(pe_entry->iov_cnt));
+		ofi_rbread(&ep->rb, &pe_entry->flags,
 			   sizeof(&pe_entry->flags));
-		ofi_rbread(&tcpx_ep->rb, &pe_entry->context,
+		ofi_rbread(&ep->rb, &pe_entry->context,
 			   sizeof(pe_entry->context));
-		ofi_rbread(&tcpx_ep->rb, &pe_entry->addr,
+		ofi_rbread(&ep->rb, &pe_entry->addr,
 			   sizeof(pe_entry->addr));
 
 		if (pe_entry->flags & FI_REMOTE_CQ_DATA) {
 			pe_entry->msg_hdr.flags |= OFI_REMOTE_CQ_DATA;
-			ofi_rbread(&tcpx_ep->rb, &pe_entry->msg_hdr.data,
+			ofi_rbread(&ep->rb, &pe_entry->msg_hdr.data,
 				   sizeof(pe_entry->msg_hdr.data));
 		}
-		ofi_rbread(&tcpx_ep->rb, &pe_entry->ep, sizeof(pe_entry->ep));
+
+		if (pe_entry->flags & FI_INJECT) {
+			pe_entry->msg_hdr.flags |= FI_INJECT;
+		}
+
+		ofi_rbread(&ep->rb, &pe_entry->ep, sizeof(pe_entry->ep));
 
 		for (i = 0; i < pe_entry->pe.tx_iov_cnt; i++) {
-			ofi_rbread(&tcpx_ep->rb, &pe_entry->iov[i],
+			ofi_rbread(&ep->rb, &pe_entry->iov[i],
 				   sizeof(pe_entry->iov[i]));
 		}
 
 		pe_entry->msg_hdr.flags = ntohl(pe_entry->msg_hdr.flags);
 		pe_entry->msg_hdr.data = ntohll(pe_entry->msg_hdr.data);
 		pe_entry->msg_hdr.size = htonl(total_len);
-		pe_entry->msg_hdr.remote_idx = htonll(PE_INDEX(progress, pe_entry));
+		if (pe_entry->is_pool_entry) {
+			pe_entry->msg_hdr.remote_idx = htonll(pe_entry->pool_list_id);
+		} else {
+			pe_entry->msg_hdr.remote_idx = htonll(PE_INDEX(progress, pe_entry));
+		}
 
-		/* Add the new pe_entry to the list */
 		dlist_insert_tail(pe_entry->ep_entry, &ep->tx_pe_list);
 	}
 	fastlock_release(&ep->rb_lock);
@@ -483,16 +539,17 @@ void *tcpx_progress_thread(void *data)
 					  ep_entry);
 
 			process_ep_tx_requests(progress, ep);
-			process_tx_pe_list(ep);
-			process_rx_pe_list(ep);
+			process_pe_lists(ep);
 		}
 	}
+	return NULL;
 }
 
-int tcpx_progress_table_init(struct progress *progress)
+int tcpx_progress_table_init(struct tcpx_progress *progress)
 {
+
 	memset(&progress->pe_table, 0,
-	       sizeof(struct sock_pe_entry) * TCPX_PE_MAX_ENTRIES);
+	       sizeof(struct tcpx_pe_entry) * TCPX_PE_MAX_ENTRIES);
 
 	dlist_init(&progress->free_list);
 	dlist_init(&progress->busy_list);
@@ -501,15 +558,18 @@ int tcpx_progress_table_init(struct progress *progress)
 	for (i = 0; i < TCPX_PE_MAX_ENTRIES; i++) {
 		dlist_insert_head(&progress->pe_table[i].entry, &progress->free_list);
 		progress->pe_table[i].cache_sz = TCPX_PE_COMM_BUFF_SZ;
-		if (ofi_rbinit(&progress->pe_table[i].comm_buf, TCPX_PE_COMM_BUFF_SZ))
+		if (ofi_rbinit(&progress->pe_table[i].comm_buf, TCPX_PE_COMM_BUFF_SZ)) {
 			FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,
 				"failed to init comm-cache\n");
+			return -FI_ENOMEM;
+		}
 	}
 	FI_DBG(&tcpx_prov, FI_LOG_DOMAIN,
 		"PE table init: OK\n");
+	return -FI_SUCCESS;
 }
 
-static int tcpx_progress_fd_poll_init(struct progress *progress)
+static int tcpx_progress_fd_poll_init(struct tcpx_progress *progress)
 {
 	int ret;
 
@@ -520,15 +580,16 @@ static int tcpx_progress_fd_poll_init(struct progress *progress)
 			"poll_fd memory alloc failed\n");
 		return -FI_ENOMEM;
 	}
-	progress->pf_data.poll_fds[0].fd = progress->signal.fd[FI_READ_FD];
-	progress->pf_data.poll_fds[0].events = POLLIN;
-	progress->pf_data.nfds = 1;
+	progress->pf_data->poll_fds[0].fd = progress->signal.fd[FI_READ_FD];
+	progress->pf_data->poll_fds[0].events = POLLIN;
+	progress->pf_data->nfds = 1;
 	return -FI_SUCCESS;
 }
 
-int tcpx_progress_init(struct tcpx_domain *domain)
+struct tcpx_progress *tcpx_progress_init(struct tcpx_domain *domain)
 {
-	struct tcpx_progress *progress = domain->progress;
+	struct tcpx_progress *progress;
+	int ret;
 
 	progress = calloc(1, sizeof(*progress));
 	if (!progress)
@@ -540,7 +601,7 @@ int tcpx_progress_init(struct tcpx_domain *domain)
 	fastlock_init(&progress->lock);
 	fastlock_init(&progress->signal_lock);
 	fastlock_init(&progress->fd_list_lock);
-	pthread_mutex_init(&progress->list_lock, NULL);
+	pthread_mutex_init(&progress->ep_list_lock, NULL);
 	dlist_init(&progress->ep_list);
 	dlist_init(&progress->fd_list);
 	progress->domain = domain;
@@ -577,7 +638,7 @@ int tcpx_progress_init(struct tcpx_domain *domain)
 			   tcpx_progress_thread, (void *)progress)) {
 		goto err5;
 	}
-	return FI_SUCCESS;
+	return progress;
 err5:
 	poll_fd_data_free(progress->pf_data);
 err4:
@@ -592,5 +653,5 @@ err1:
 	pthread_mutex_destroy(&progress->list_lock);
 	fastlock_destroy(&progress->fd_list_lock);
 	free(progress);
-	return ret;
+	return NULL;
 }

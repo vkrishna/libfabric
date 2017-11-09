@@ -57,6 +57,7 @@
 #include <fi_list.h>
 #include <fi_signal.h>
 #include <fi_util.h>
+#include <fi_proto.h>
 
 #ifndef _TCP_H_
 #define _TCP_H_
@@ -80,35 +81,10 @@ extern struct fi_info tcpx_info;
 #define TCPX_SOCK_ADD (1ULL << 0)
 #define TCPX_SOCK_DEL (1ULL << 1)
 
-int tcpx_create_fabric(struct fi_fabric_attr *attr,
-		struct fid_fabric **fabric,
-		void *context);
-
-int tcpx_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
-		    struct fid_pep **pep, void *context);
-
-int tcpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
-		     struct fid_domain **domain, void *context);
-
-
-int tcpx_endpoint(struct fid_domain *domain, struct fi_info *info,
-		  struct fid_ep **ep_fid, void *context);
-
-
-int tcpx_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
-		 struct fid_cq **cq_fid, void *context);
-
-int poll_fd_data_alloc(struct poll_fd_data *pf_data, int size);
-void poll_fds_swap_del_last(int index, struct poll_fd_data *pf_data);
-int poll_fds_find_dup(struct poll_fd_data *pf_data, struct poll_fd_info *fd_info_entry);
-int poll_fds_add_item(struct poll_fd_data *pf_data, struct poll_fd_info *fd_info_entry);
-
-ssize_t tcpx_comm_send(struct sock_pe_entry *pe_entry, void *buf, size_t len);
-ssize_t tcpx_comm_recv(struct sock_pe_entry *pe_entry, void *buf, size_t len);
-
 enum tcpx_xfer_states {
 	TCPX_XFER_STARTED,
 	TCPX_XFER_HDR_SENT,
+	TCPX_XFER_FLUSH_COMM_BUF,
 	TCPX_XFER_WAIT_FOR_ACK,
 	TCPX_XFER_HDR_RECVD,
 	TCPX_XFER_WAIT_SENDING_ACK,
@@ -158,27 +134,27 @@ struct tcpx_pep {
 	int sock_fd_closed;
 };
 
-struct tcpx_rx_pe {
-};
+/* struct tcpx_rx_pe { */
+/* }; */
 
-struct tcpx_tx_pe {
-	/* uint8_t op; */
-	/* uint8_t tx_iov_cnt; */
-	/* uint8_t rsvd[2]; */
-	enum tx_state state;
-	/* uint8_t header_sent; */
-	/* uint8_t send_done; */
-	/* uint8_t reserved[6]; */
-	/* struct sock_tx_iov tx_iov[TCPX_IOV_LIMIT]; */
-	/* char inject[SOCK_EP_MAX_INJECT_SZ]; */
-};
+/* struct tcpx_tx_pe { */
+/* 	/\* uint8_t op; *\/ */
+/* 	/\* uint8_t tx_iov_cnt; *\/ */
+/* 	/\* uint8_t rsvd[2]; *\/ */
+/* 	enum tx_state state; */
+/* 	/\* uint8_t header_sent; *\/ */
+/* 	/\* uint8_t send_done; *\/ */
+/* 	/\* uint8_t reserved[6]; *\/ */
+/* 	/\* struct sock_tx_iov tx_iov[TCPX_IOV_LIMIT]; *\/ */
+/* 	/\* char inject[SOCK_EP_MAX_INJECT_SZ]; *\/ */
+/* }; */
 
 struct tcpx_op_send {
 	uint8_t op;
 	uint8_t buf_iov_cnt;
 	uint8_t rsvd[6];
 	uint64_t flags;
-	uint64_t context;
+	void *context;
 	uint64_t dest_addr;
 	uint64_t buf_iov;
 	struct tcpx_ep *ep;
@@ -196,13 +172,14 @@ struct tcpx_ep {
 	pthread_mutex_t rx_entry_list_lock;
 	struct dlist_entry rx_entry_list;
 	fastlock_t rb_lock;
-	struct ofi_ringbuf rb_buf;
+	struct ofi_ringbuf rb;
 };
 
 struct tcpx_fabric {
 	struct util_fabric util_fabric;
 	struct fd_signal signal;
-	struct poll_fd_list pf_list;
+	fastlock_t fd_list_lock;
+	struct dlist_entry fd_list;
 	pthread_t conn_mgr_thread;
 	int run_cm_thread;
 };
@@ -212,11 +189,14 @@ struct tcpx_domain {
 	struct tcpx_progress *progress;
 };
 
+struct tcpx_msg_response {
+
+};
+
 struct tcpx_pe_entry {
-	enum tx_state state;
+	enum tcpx_xfer_states state;
 	struct ofi_op_hdr msg_hdr;
-	struct tcpx_iov iov[TCPX_IOV_LIMIT];
-	/* char inject[TCPX_MAX_INJECT_SZ]; */
+	union tcpx_iov iov[TCPX_IOV_LIMIT];
 	struct tcpx_msg_response msg_resp;
 	struct dlist_entry entry;
 	struct dlist_entry ep_entry;
@@ -224,12 +204,13 @@ struct tcpx_pe_entry {
 	struct tcpx_ep *ep;
 	size_t cache_sz;
 	uint64_t flags;
-	uint64_t context;
+	void *context;
 	uint64_t addr;
 	uint64_t tag;
 	uint64_t buf;
 	uint64_t total_len;
 	uint64_t done_len;
+	uint64_t pool_list_id;
 	uint8_t iov_count;
 	uint8_t wait_for_resp;
 	uint8_t is_pool_entry;
@@ -260,13 +241,44 @@ struct tcpx_rx_entry {
 	uint8_t op;
 	uint8_t rsvd[7];
 	uint64_t flags;
-	uint64_t context;
+	void *context;
 	uint64_t data;
 	uint64_t tag;
-	union tcpx_iov iov[SOCK_EP_MAX_IOV_LIMIT];
+	union tcpx_iov iov[TCPX_IOV_LIMIT];
 	struct dlist_entry entry;
 	struct slist_entry pool_entry;
 	struct tcpx_ep *ep;
 };
+
+int tcpx_create_fabric(struct fi_fabric_attr *attr,
+		struct fid_fabric **fabric,
+		void *context);
+
+int tcpx_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
+		    struct fid_pep **pep, void *context);
+
+int tcpx_domain_open(struct fid_fabric *fabric, struct fi_info *info,
+		     struct fid_domain **domain, void *context);
+
+
+int tcpx_endpoint(struct fid_domain *domain, struct fi_info *info,
+		  struct fid_ep **ep_fid, void *context);
+
+
+int tcpx_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
+		 struct fid_cq **cq_fid, void *context);
+
+int poll_fd_data_alloc(struct poll_fd_data *pf_data, int size);
+void poll_fds_swap_del_last(int index, struct poll_fd_data *pf_data);
+int poll_fds_find_dup(struct poll_fd_data *pf_data, struct poll_fd_info *fd_info_entry);
+int poll_fds_add_item(struct poll_fd_data *pf_data, struct poll_fd_info *fd_info_entry);
+
+ssize_t tcpx_comm_send(struct tcpx_pe_entry *pe_entry, void *buf, size_t len);
+ssize_t tcpx_comm_recv(struct tcpx_pe_entry *pe_entry, void *buf, size_t len);
+void poll_fd_data_free(struct poll_fd_data *pf_data);
+
+struct tcpx_progress *tcpx_progress_init(struct tcpx_domain *domain);
+int tcpx_progress_close(struct tcpx_domain *domain);
+void tcpx_progress_signal(struct tcpx_progress *progress);
 
 #endif //_TCP_H_

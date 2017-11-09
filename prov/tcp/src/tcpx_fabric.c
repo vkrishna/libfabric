@@ -268,7 +268,7 @@ static void *tcpx_conn_mgr_thread(void *data)
 		handle_fd_events(tcpx_fabric, &pf_data);
 	}
 out:
-	poll_fd_data_free(pf_data);
+	poll_fd_data_free(&pf_data);
 	return NULL;
 }
 

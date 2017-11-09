@@ -83,20 +83,20 @@ static void tcpx_comm_recv_buffer(struct tcpx_pe_entry *pe_entry)
 	ofi_rbcommit(&pe_entry->comm_buf);
 }
 
-ssize_t tcpx_comm_recv(struct sock_pe_entry *pe_entry, void *buf, size_t len)
+ssize_t tcpx_comm_recv(struct tcpx_pe_entry *pe_entry, void *buf, size_t len)
 {
 	ssize_t read_len;
 	if (ofi_rbempty(&pe_entry->comm_buf)) {
 		if (len <= pe_entry->cache_sz) {
-			sock_comm_recv_buffer(pe_entry);
+			tcpx_comm_recv_buffer(pe_entry);
 		} else {
-			return sock_comm_recv_socket(pe_entry->ep->conn_fd, buf, len);
+			return tcpx_comm_recv_socket(pe_entry->ep->conn_fd, buf, len);
 		}
 	}
 
 	read_len = MIN(len, ofi_rbused(&pe_entry->comm_buf));
 	ofi_rbread(&pe_entry->comm_buf, buf, read_len);
-	SOCK_LOG_DBG("read from buffer: %lu\n", read_len);
+	FI_DBG(&tcpx_prov, FI_LOG_EP_DATA, "read from buffer: %lu\n", read_len);
 	return read_len;
 }
 

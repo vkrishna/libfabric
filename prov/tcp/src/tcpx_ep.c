@@ -53,11 +53,12 @@ static ssize_t tcpx_recvmsg(struct fid_ep *ep, const struct fi_msg *msg,
 {
 	struct tcpx_rx_entry *rx_entry;
 	struct tcpx_domain *tcpx_domain;
-	struct tcpx_iov iov;
+	struct tcpx_ep *tcpx_ep;
+	union tcpx_iov iov;
 	int i;
 
 	tcpx_ep = container_of(ep, struct tcpx_ep, util_ep.ep_fid);
-	tcpx_domain = container_of(tcpx_ep->util_ep->domain,
+	tcpx_domain = container_of(tcpx_ep->util_ep.domain,
 				   struct tcpx_domain, util_domain);
 
 	rx_entry = util_buf_alloc(tcpx_domain->progress->rx_entry_pool);
@@ -69,10 +70,10 @@ static ssize_t tcpx_recvmsg(struct fid_ep *ep, const struct fi_msg *msg,
 	rx_entry->flags = flags;
 	rx_entry->context = msg->context;
 
-	for (i = 0 ; i < msg.iov_count; i++) {
+	for (i = 0 ; i < msg->iov_count; i++) {
 		iov.iov.addr = (uintptr_t) msg->msg_iov[i].iov_base;
 		iov.iov.len = msg->msg_iov[i].iov_len;
-		memcpy(&rx_entry->iov[i], iov, sizeof(iov));
+		memcpy(&rx_entry->iov[i], &iov, sizeof(iov));
 	}
 
 	dlist_insert_tail(&rx_entry->entry, &tcpx_ep->rx_entry_list);
@@ -119,27 +120,28 @@ static ssize_t tcpx_sendmsg(struct fid_ep *ep, const struct fi_msg *msg,
 	uint64_t total_len = 0;
 	struct tcpx_op_send op_send;
 	struct tcpx_domain *tcpx_domain;
-	struct tcpx_iov tx_iov;
+	union tcpx_iov tx_iov;
+	int i;
 
 	tcpx_ep = container_of(ep, struct tcpx_ep, util_ep.ep_fid);
-	tcpx_domain = container_of(tcpx_ep->util_ep->domain,
+	tcpx_domain = container_of(tcpx_ep->util_ep.domain,
 				   struct tcpx_domain, util_domain);
 
 	if (flags & FI_INJECT) {
 		for (i = 0; i < msg->iov_count; i++)
 			total_len += msg->msg_iov[i].iov_len;
 
-		if (total_len > SOCK_EP_MAX_INJECT_SZ)
+		if (total_len > TCPX_MAX_INJECT_SZ)
 			return -FI_EINVAL;
 	}
 
-	op_send.op = TCPX_MSG_SEND;
+	op_send.op = TCPX_OP_MSG_SEND;
 	total_len = sizeof(struct tcpx_op_send);
 
 	if (flags & FI_REMOTE_CQ_DATA)
 		total_len += sizeof(uint64_t);
 
-	total_len += msg->iov_count * sizeof(union sock_iov);
+	total_len += msg->iov_count * sizeof(union tcpx_iov);
 
 	fastlock_acquire(&tcpx_ep->rb_lock);
 	if (ofi_rbavail(&tcpx_ep->rb) < total_len) {
@@ -147,8 +149,8 @@ static ssize_t tcpx_sendmsg(struct fid_ep *ep, const struct fi_msg *msg,
 		goto err;
 	}
 	ofi_rbwrite(&tcpx_ep->rb, &op_send.op, sizeof(op_send.op));
-	ofi_rbwrite(&tcpx_ep->rb, &msg->buf_iov_cnt,
-		    sizeof(msg->buf_iov_cnt));
+	ofi_rbwrite(&tcpx_ep->rb, &msg->iov_count,
+		    sizeof(msg->iov_count));
 	ofi_rbwrite(&tcpx_ep->rb, &flags, sizeof(flags));
 	ofi_rbwrite(&tcpx_ep->rb, &msg->context, sizeof(msg->context));
 	ofi_rbwrite(&tcpx_ep->rb, &msg->addr, sizeof(msg->addr));
@@ -216,7 +218,7 @@ static ssize_t tcpx_inject(struct fid_ep *ep, const void *buf, size_t len,
 	msg.desc = NULL;
 	msg.iov_count = 1;
 	msg.addr = dest_addr;
-	msg..context = NULL;
+	msg.context = NULL;
 	msg.data = 0;
 
 	return tcpx_sendmsg(ep, &msg, FI_INJECT | TCPX_NO_COMPLETION);
@@ -235,7 +237,7 @@ static ssize_t tcpx_senddata(struct fid_ep *ep, const void *buf, size_t len, voi
 	msg.desc = NULL;
 	msg.iov_count = 1;
 	msg.addr = dest_addr;
-	msg..context = NULL;
+	msg.context = NULL;
 	msg.data = data;
 
 	return tcpx_sendmsg(ep, &msg, FI_REMOTE_CQ_DATA);
@@ -254,7 +256,7 @@ static ssize_t tcpx_injectdata(struct fid_ep *ep, const void *buf, size_t len,
 	msg.desc = NULL;
 	msg.iov_count = 1;
 	msg.addr = dest_addr;
-	msg..context = NULL;
+	msg.context = NULL;
 	msg.data = 0;
 
 	return tcpx_sendmsg(ep, &msg, FI_REMOTE_CQ_DATA | FI_INJECT |
