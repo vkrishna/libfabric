@@ -266,6 +266,7 @@ static int tcpx_ep_msg_xfer_enable(struct tcpx_ep *ep)
 	ep->cm_state = TCPX_EP_CONN_ACTIVE;
 	fastlock_release(&ep->cm_state_lock);
 
+	tcpx_progress_ep_add(ep);
 	return fi_fd_nonblock(ep->conn_fd);
 }
 
