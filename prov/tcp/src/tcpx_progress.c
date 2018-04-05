@@ -42,40 +42,21 @@
 #include <ofi_util.h>
 #include <ofi_iov.h>
 
-int tcpx_ep_shutdown_report(struct tcpx_ep *ep, fid_t fid, int err)
+int tcpx_ep_shutdown_report(struct tcpx_ep *ep, fid_t fid)
 {
 	struct fi_eq_cm_entry cm_entry = {0};
-	struct fi_eq_err_entry err_entry = {0};
-	int ret = FI_SUCCESS;
 
 	fastlock_acquire(&ep->cm_state_lock);
-	if (ep->cm_state == TCPX_EP_CONN_SHUTDOWN)
-		goto success;
-
-	if (err) {
-		err_entry.fid = fid;
-		err_entry.context = fid->context;
-		err_entry.err = -err;
-		if (fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
-				&err_entry, sizeof(err_entry),
-				UTIL_FLAG_ERROR) < 0) {
-			ret = (int) -errno;
-			goto err;
-		}
-		goto success;
+	if (ep->cm_state == TCPX_EP_SHUTDOWN) {
+		fastlock_release(&ep->cm_state_lock);
+		return FI_SUCCESS;
 	}
+	ep->cm_state = TCPX_EP_SHUTDOWN;
+	fastlock_release(&ep->cm_state_lock);
 
 	cm_entry.fid = fid;
-	if (fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
-			&cm_entry, sizeof(cm_entry), 0) < 0) {
-		ret = (int) -errno;
-		goto err;
-	}
-success:
-	ep->cm_state = TCPX_EP_CONN_SHUTDOWN;
-err:
-	fastlock_release(&ep->cm_state_lock);
-	return ret;
+	return fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
+			  &cm_entry, sizeof(cm_entry), 0);
 }
 
 static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
@@ -98,8 +79,7 @@ static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 err:
 	if (ret == -FI_ENOTCONN) {
 		tcpx_ep_shutdown_report(pe_entry->ep,
-					&pe_entry->ep->util_ep.ep_fid.fid,
-					0);
+					&pe_entry->ep->util_ep.ep_fid.fid);
 	}
 done:
 	tcpx_cq_report_completion(pe_entry->ep->util_ep.tx_cq,
@@ -127,8 +107,7 @@ static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 err:
 	if (ret == -FI_ENOTCONN) {
 		tcpx_ep_shutdown_report(pe_entry->ep,
-					&pe_entry->ep->util_ep.ep_fid.fid,
-					0);
+					&pe_entry->ep->util_ep.ep_fid.fid);
 	}
 done:
 	tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
@@ -194,7 +173,7 @@ int tcpx_progress_ep_add(struct tcpx_ep *ep)
 void tcpx_progress_ep_del(struct tcpx_ep *ep)
 {
 	fastlock_acquire(&ep->cm_state_lock);
-	if (ep->cm_state == TCPX_EP_INIT) {
+	if (ep->cm_state == TCPX_EP_CONNECTING) {
 		fastlock_release(&ep->cm_state_lock);
 		return;
 	}

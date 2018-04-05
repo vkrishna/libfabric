@@ -263,7 +263,11 @@ static int send_conn_req(struct poll_fd_mgr *poll_mgr,
 static int tcpx_ep_msg_xfer_enable(struct tcpx_ep *ep)
 {
 	fastlock_acquire(&ep->cm_state_lock);
-	ep->cm_state = TCPX_EP_CONN_ACTIVE;
+	if (ep->cm_state != TCPX_EP_CONNECTING) {
+		fastlock_release(&ep->cm_state_lock);
+		return -FI_EINVAL;
+	}
+	ep->cm_state = TCPX_EP_CONNECTED;
 	fastlock_release(&ep->cm_state_lock);
 
 	tcpx_progress_ep_add(ep);
@@ -345,7 +349,7 @@ err:
 	err_entry.err = -ret;
 
 	poll_info->state = CONNECT_DONE;
-	fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
+	fi_eq_write(&ep->util_ep.eq->eq_fid, FI_NOTIFY,
 		    &err_entry, sizeof(err_entry), UTIL_FLAG_ERROR);
 }
 
@@ -441,7 +445,7 @@ err:
 	err_entry.context = poll_info->fid->context;
 	err_entry.err = ret;
 
-	fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
+	fi_eq_write(&ep->util_ep.eq->eq_fid, FI_NOTIFY,
 		    &err_entry, sizeof(err_entry), UTIL_FLAG_ERROR);
 }
 

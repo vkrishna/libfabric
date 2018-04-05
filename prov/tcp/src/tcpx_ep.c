@@ -387,16 +387,14 @@ static int tcpx_ep_shutdown(struct fid_ep *ep, uint64_t flags)
 	ret = ofi_shutdown(tcpx_ep->conn_fd, SHUT_RDWR);
 	if (ret && errno != ENOTCONN) {
 		FI_WARN(&tcpx_prov, FI_LOG_EP_DATA, "ep shutdown unsuccessful\n");
-		return -errno;
 	}
 
-	ret = tcpx_ep_shutdown_report(tcpx_ep, &ep->fid, 0);
+	ret = tcpx_ep_shutdown_report(tcpx_ep, &ep->fid);
 	if (ret) {
 		FI_WARN(&tcpx_prov, FI_LOG_EP_DATA, "Error writing to EQ\n");
-		return ret;
 	}
 
-	return FI_SUCCESS;
+	return ret;
 }
 
 static int tcpx_pep_sock_create(struct tcpx_pep *pep)
@@ -597,7 +595,7 @@ int tcpx_endpoint(struct fid_domain *domain, struct fi_info *info,
 	if (ret)
 		goto err3;
 
-	ep->cm_state = TCPX_EP_INIT;
+	ep->cm_state = TCPX_EP_CONNECTING;
 
 	ret = fastlock_init(&ep->cm_state_lock);
 	if (ret)

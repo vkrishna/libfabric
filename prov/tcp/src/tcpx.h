@@ -112,7 +112,7 @@ int tcpx_send_msg(struct tcpx_pe_entry *pe_entry);
 struct tcpx_pe_entry *tcpx_pe_entry_alloc(struct tcpx_cq *cq);
 void tcpx_pe_entry_release(struct tcpx_pe_entry *pe_entry);
 void tcpx_progress(struct util_ep *util_ep);
-int tcpx_ep_shutdown_report(struct tcpx_ep *ep, fid_t fid, int err);
+int tcpx_ep_shutdown_report(struct tcpx_ep *ep, fid_t fid);
 int tcpx_progress_ep_add(struct tcpx_ep *ep);
 void tcpx_progress_ep_del(struct tcpx_ep *ep);
 
@@ -168,9 +168,10 @@ struct tcpx_pep {
 };
 
 enum tcpx_cm_state {
-	TCPX_EP_INIT,
-	TCPX_EP_CONN_ACTIVE,
-	TCPX_EP_CONN_SHUTDOWN,
+	TCPX_EP_CONNECTING,
+	TCPX_EP_CONNECTED,
+	TCPX_EP_SHUTDOWN,
+	TCPX_EP_ERROR,
 };
 
 struct tcpx_ep {
