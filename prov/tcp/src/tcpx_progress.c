@@ -42,6 +42,42 @@
 #include <ofi_util.h>
 #include <ofi_iov.h>
 
+int tcpx_ep_shutdown_report(struct tcpx_ep *ep, fid_t fid, int err)
+{
+	struct fi_eq_cm_entry cm_entry = {0};
+	struct fi_eq_err_entry err_entry = {0};
+	int ret = FI_SUCCESS;
+
+	fastlock_acquire(&ep->cm_state_lock);
+	if (ep->cm_state == TCPX_EP_CONN_SHUTDOWN)
+		goto success;
+
+	if (err) {
+		err_entry.fid = fid;
+		err_entry.context = fid->context;
+		err_entry.err = -err;
+		if (fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
+				&err_entry, sizeof(err_entry),
+				UTIL_FLAG_ERROR) < 0) {
+			ret = (int) -errno;
+			goto err;
+		}
+		goto success;
+	}
+
+	cm_entry.fid = fid;
+	if (fi_eq_write(&ep->util_ep.eq->eq_fid, FI_SHUTDOWN,
+			&cm_entry, sizeof(cm_entry), 0) < 0) {
+		ret = (int) -errno;
+		goto err;
+	}
+success:
+	ep->cm_state = TCPX_EP_CONN_SHUTDOWN;
+err:
+	fastlock_release(&ep->cm_state_lock);
+	return ret;
+}
+
 static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 {
 	uint64_t total_len = ntohll(pe_entry->msg_hdr.size);
@@ -53,17 +89,22 @@ static void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry)
 
 	if (ret) {
 		FI_WARN(&tcpx_prov, FI_LOG_DOMAIN, "msg send failed\n");
-		tcpx_cq_report_completion(pe_entry->ep->util_ep.tx_cq,
-					  pe_entry, ret);
-		tcpx_pe_entry_release(pe_entry);
-		return;
+		goto err;
 	}
 
-	if (pe_entry->done_len == total_len) {
-		tcpx_cq_report_completion(pe_entry->ep->util_ep.tx_cq,
-					  pe_entry, 0);
-		tcpx_pe_entry_release(pe_entry);
+	if (pe_entry->done_len == total_len)
+		goto done;
+	return;
+err:
+	if (ret == -FI_ENOTCONN) {
+		tcpx_ep_shutdown_report(pe_entry->ep,
+					&pe_entry->ep->util_ep.ep_fid.fid,
+					0);
 	}
+done:
+	tcpx_cq_report_completion(pe_entry->ep->util_ep.tx_cq,
+				  pe_entry, ret);
+	tcpx_pe_entry_release(pe_entry);
 }
 
 static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
@@ -76,18 +117,23 @@ static void process_rx_pe_entry(struct tcpx_pe_entry *pe_entry)
 
 	if (ret) {
 		FI_WARN(&tcpx_prov, FI_LOG_DOMAIN, "msg recv Failed ret = %d\n", ret);
-		tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
-					  pe_entry, ret);
-		tcpx_pe_entry_release(pe_entry);
-		return;
+		goto err;
 	}
 
 	if (pe_entry->done_len &&
-	    pe_entry->done_len == ntohll(pe_entry->msg_hdr.size)) {
-		tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
-					  pe_entry, 0);
-		tcpx_pe_entry_release(pe_entry);
+	    pe_entry->done_len == ntohll(pe_entry->msg_hdr.size))
+		goto done;
+	return;
+err:
+	if (ret == -FI_ENOTCONN) {
+		tcpx_ep_shutdown_report(pe_entry->ep,
+					&pe_entry->ep->util_ep.ep_fid.fid,
+					0);
 	}
+done:
+	tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
+				  pe_entry, ret);
+	tcpx_pe_entry_release(pe_entry);
 }
 
 static void process_rx_queue(struct tcpx_ep *ep)

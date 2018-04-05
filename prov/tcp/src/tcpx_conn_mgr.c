@@ -260,6 +260,15 @@ static int send_conn_req(struct poll_fd_mgr *poll_mgr,
 	return ret;
 }
 
+static int tcpx_ep_msg_xfer_enable(struct tcpx_ep *ep)
+{
+	fastlock_acquire(&ep->cm_state_lock);
+	ep->cm_state = TCPX_EP_CONN_ACTIVE;
+	fastlock_release(&ep->cm_state_lock);
+
+	return fi_fd_nonblock(ep->conn_fd);
+}
+
 static int proc_conn_resp(struct poll_fd_mgr *poll_mgr,
 			  struct poll_fd_info *poll_info,
 			  struct tcpx_ep *ep,
@@ -289,7 +298,7 @@ static int proc_conn_resp(struct poll_fd_mgr *poll_mgr,
 		FI_WARN(&tcpx_prov, FI_LOG_EP_CTRL, "Error writing to EQ\n");
 		goto err;
 	}
-	ret = fi_fd_nonblock(ep->conn_fd);
+	ret = tcpx_ep_msg_xfer_enable(ep);
 err:
 	free(cm_entry);
 	return ret;
@@ -423,7 +432,7 @@ static void handle_accept_conn(struct poll_fd_mgr *poll_mgr,
 		FI_WARN(&tcpx_prov, FI_LOG_EP_CTRL, "Error writing to EQ\n");
 	}
 
-	ret = fi_fd_nonblock(ep->conn_fd);
+	tcpx_ep_msg_xfer_enable(ep);
 	return;
 err:
 	memset(&err_entry, 0, sizeof err_entry);
