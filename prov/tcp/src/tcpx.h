@@ -120,6 +120,10 @@ void process_tx_pe_entry(struct tcpx_pe_entry *pe_entry);
 enum tcpx_xfer_op_codes {
 	TCPX_OP_MSG_SEND,
 	TCPX_OP_MSG_RECV,
+	TCPX_OP_RMA_WRITE,
+	TCPX_OP_RMA_READ,
+	TCPX_OP_RMA_REMOTE_WRITE,
+	TCPX_OP_RMA_REMOTE_READ,
 };
 
 enum poll_fd_type {
@@ -193,14 +197,19 @@ struct tcpx_fabric {
 	pthread_t		conn_mgr_thread;
 };
 
-struct tcpx_msg_data {
-	size_t		iov_cnt;
+struct tcpx_rma_data {
+	size_t			rma_iov_cnt;
 	union {
-		struct iovec		iov[TCPX_IOV_LIMIT+1];
-		struct fi_rma_iov	rma_iov[TCPX_IOV_LIMIT+1];
-		struct fi_rma_ioc	rma_ioc[TCPX_IOV_LIMIT+1];
+		struct fi_rma_iov	rma_iov[TCPX_IOV_LIMIT];
+		struct fi_rma_ioc	rma_ioc[TCPX_IOV_LIMIT];
 	};
+};
+
+struct tcpx_msg_data {
+	size_t			iov_cnt;
+	struct iovec		iov[TCPX_IOV_LIMIT+2];
 	uint8_t			inject[TCPX_MAX_INJECT_SZ];
+	struct tcpx_rma_data	rma_data;
 };
 
 struct tcpx_pe_entry {
