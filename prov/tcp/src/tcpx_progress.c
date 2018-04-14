@@ -117,16 +117,25 @@ done:
 
 static void process_rx_queue(struct tcpx_ep *ep)
 {
-	struct tcpx_pe_entry *pe_entry;
-	struct dlist_entry *entry;
 
-	if (dlist_empty(&ep->rx_queue))
-		return;
+	/* struct tcpx_pe_entry *pe_entry; */
+	/* struct dlist_entry *entry; */
 
-	entry = ep->rx_queue.next;
-	pe_entry = container_of(entry, struct tcpx_pe_entry,
-				entry);
-	process_rx_pe_entry(pe_entry);
+	/* if (dlist_empty(&ep->rx_queue)) */
+	/* 	return; */
+
+	/* entry = ep->rx_queue.next; */
+	/* pe_entry = container_of(entry, struct tcpx_pe_entry, */
+	/* 			entry); */
+	if (!ep->cur_rx_entry) {
+		struct tcpx_cq *tcpx_cq = container_of(ep->util_ep.rx_cq,
+						       struct tcpx_cq,
+						       util_cq);
+
+		ep->cur_rx_entry = tcpx_pe_entry_alloc(tcpx_cq);
+	}
+
+	process_rx_pe_entry(ep->cur_rx_entry);
 }
 
 static void process_tx_queue(struct tcpx_ep *ep)

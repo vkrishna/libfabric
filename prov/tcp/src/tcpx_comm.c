@@ -57,6 +57,26 @@ int tcpx_send_msg(struct tcpx_pe_entry *pe_entry)
 	return FI_SUCCESS;
 }
 
+static void tcpx_find_entry(struct tcpx_pe_entry *pe_entry)
+{
+	switch (pe_entry->msg_hdr.op) {
+	case ofi_op_msg:
+		/* get the next in the rx_queue */
+		break;
+	case ofi_op_read_req:
+		/* collect the data from requested iov and respond with send */
+		break;
+	case ofi_op_read_rsp:
+		/* find the entry in remote read queue and place data */
+		break;
+	case ofi_op_write:
+		/* place the data at the right place */
+		break;
+	default:
+		break;
+	}
+}
+
 static int tcpx_recv_msg_hdr(struct tcpx_pe_entry *pe_entry)
 {
 	ssize_t bytes_recvd;
@@ -75,6 +95,9 @@ static int tcpx_recv_msg_hdr(struct tcpx_pe_entry *pe_entry)
 
 	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr))
 		return -FI_EAGAIN;
+
+	/* pick the apt pe_entry */
+	tcpx_find_entry(pe_entry);
 
 	pe_entry->msg_hdr.op_data = TCPX_OP_MSG_RECV;
 	return ofi_truncate_iov(pe_entry->msg_data.iov,

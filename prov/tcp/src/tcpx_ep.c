@@ -611,6 +611,10 @@ int tcpx_endpoint(struct fid_domain *domain, struct fi_info *info,
 
 	dlist_init(&ep->rx_queue);
 	dlist_init(&ep->tx_queue);
+	dlist_init(&ep->rma_read_queue);
+
+	/* ep->cur_rx_entry = NULL; */
+	/* ep->cur_tx_entry = NULL; */
 
 	*ep_fid = &ep->util_ep.ep_fid;
 	(*ep_fid)->fid.ops = &tcpx_ep_fi_ops;
