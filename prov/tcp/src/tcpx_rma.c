@@ -82,8 +82,8 @@ static ssize_t tcpx_rma_common(struct fid_ep *ep, const struct fi_msg_rma *msg,
 
 	/* remote iov  */
 	assert(msg->rma_iov_cnt < TCPX_IOV_LIMIT);
-	send_entry->msg_data.iov[1].iov_base = (void *) &send_entry->msg_data.rma_data;
-	send_entry->msg_data.iov[1].iov_len = sizeof(send_entry->msg_data.rma_data);
+	send_entry->msg_data.iov[1].iov_base = (void *) &send_entry->rma_data;
+	send_entry->msg_data.iov[1].iov_len = sizeof(send_entry->rma_data);
 
 	send_entry->msg_data.iov_cnt = msg->iov_count + 2;
 
@@ -155,24 +155,10 @@ static ssize_t tcpx_rma_readmsg(struct fid_ep *ep, const struct fi_msg_rma *msg,
 
 	/* remote iov  */
 	assert(msg->rma_iov_cnt < TCPX_IOV_LIMIT);
-	send_entry->msg_data.iov[1].iov_base = (void *) &send_entry->msg_data.rma_data;
-	send_entry->msg_data.iov[1].iov_len = sizeof(send_entry->msg_data.rma_data);
+	send_entry->msg_data.iov[1].iov_base = (void *) &send_entry->rma_data;
+	send_entry->msg_data.iov[1].iov_len = sizeof(send_entry->rma_data);
 
 	send_entry->msg_data.iov_cnt = msg->iov_count + 2;
-
-	if (flags & FI_INJECT) {
-		ofi_copy_iov_buf(msg->msg_iov, msg->iov_count, 0,
-				 send_entry->msg_data.inject,
-				 data_len,
-				 OFI_COPY_IOV_TO_BUF);
-
-		send_entry->msg_data.iov[2].iov_base = (void *)send_entry->msg_data.inject;
-		send_entry->msg_data.iov[2].iov_len = data_len;
-		send_entry->msg_data.iov_cnt = 3;
-	} else {
-		memcpy(&send_entry->msg_data.iov[2], &msg->msg_iov[0],
-		       msg->iov_count * sizeof(struct iovec));
-	}
 
 	if (flags & FI_REMOTE_CQ_DATA) {
 		send_entry->msg_hdr.flags |= OFI_REMOTE_CQ_DATA;
@@ -184,7 +170,18 @@ static ssize_t tcpx_rma_readmsg(struct fid_ep *ep, const struct fi_msg_rma *msg,
 	send_entry->context = msg->context;
 	send_entry->done_len = 0;
 
+	recv_entry->msg_data.iov_cnt = msg->iov_count;
+	memcpy(&recv_entry->msg_data.iov[0], &msg->msg_iov[0],
+	       msg->iov_count * sizeof(struct iovec));
+
+	recv_entry->ep = tcpx_ep;
+	recv_entry->context = msg->context;
+	recv_entry->done_len = 0;
+
+	fastlock_acquire(&tcpx_ep->queue_lock);
 	dlist_insert_tail(&send_entry->entry, &tcpx_ep->tx_queue);
+	dlist_insert_tail(&recv_entry->entry, &tcpx_ep->rma_read_queue);
+	fastlock_release(&tcpx_ep->queue_lock);
 	return FI_SUCCESS;
 }
 

@@ -81,6 +81,7 @@ extern struct fi_info		tcpx_info;
 struct tcpx_fabric;
 struct tcpx_domain;
 struct tcpx_pe_entry;
+struct tcpx_rx_hdr;
 struct tcpx_cq;
 struct tcpx_ep;
 
@@ -109,6 +110,7 @@ int tcpx_conn_mgr_init(struct tcpx_fabric *tcpx_fabric);
 void tcpx_conn_mgr_close(struct tcpx_fabric *tcpx_fabric);
 int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry);
 int tcpx_send_msg(struct tcpx_pe_entry *pe_entry);
+int tcpx_recv_rx_hdr(struct tcpx_rx_hdr *rx_hdr);
 struct tcpx_pe_entry *tcpx_pe_entry_alloc(struct tcpx_cq *cq);
 void tcpx_pe_entry_release(struct tcpx_pe_entry *pe_entry);
 void tcpx_progress(struct util_ep *util_ep);
@@ -179,6 +181,11 @@ enum tcpx_cm_state {
 	TCPX_EP_ERROR,
 };
 
+struct tcpx_rx_hdr {
+	struct ofi_op_hdr	hdr;
+	size_t			done_len;
+};
+
 struct tcpx_ep {
 	struct util_ep		util_ep;
 	SOCKET			conn_fd;
@@ -186,6 +193,7 @@ struct tcpx_ep {
 	struct dlist_entry	rx_queue;
 	struct dlist_entry	tx_queue;
 	struct dlist_entry	rma_read_queue;
+	struct tcpx_rx_hdr	rx_hdr;
 	struct tcpx_pe_entry	*cur_rx_entry;
 	/* lock for protecting tx/rx queues */
 	fastlock_t		queue_lock;
@@ -211,12 +219,12 @@ struct tcpx_msg_data {
 	size_t			iov_cnt;
 	struct iovec		iov[TCPX_IOV_LIMIT+2];
 	uint8_t			inject[TCPX_MAX_INJECT_SZ];
-	struct tcpx_rma_data	rma_data;
 };
 
 struct tcpx_pe_entry {
 	struct ofi_op_hdr	msg_hdr;
 	struct tcpx_msg_data	msg_data;
+	struct tcpx_rma_data	rma_data;
 	struct dlist_entry	entry;
 	struct tcpx_ep		*ep;
 	uint64_t		flags;

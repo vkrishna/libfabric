@@ -57,53 +57,140 @@ int tcpx_send_msg(struct tcpx_pe_entry *pe_entry)
 	return FI_SUCCESS;
 }
 
-static void tcpx_find_entry(struct tcpx_pe_entry *pe_entry)
+static int tcpx_find_entry(struct tcpx_rx_hdr *rx_hdr)
 {
-	switch (pe_entry->msg_hdr.op) {
+	struct tcpx_ep *ep = container_of(rx_hdr, struct tcpx_ep, rx_hdr);
+	struct tcpx_cq *cq;
+	struct dlist_entry *entry;
+
+	switch (rx_hdr->hdr.op) {
 	case ofi_op_msg:
-		/* get the next in the rx_queue */
-		break;
-	case ofi_op_read_req:
-		/* collect the data from requested iov and respond with send */
+
+		if (dlist_empty(&ep->rx_queue))
+			return -FI_EAGAIN;
+
+		entry = ep->rx_queue.next;
+		ep->cur_rx_entry = container_of(entry, struct tcpx_pe_entry,
+						entry);
+
+		ofi_truncate_iov(ep->cur_rx_entry->msg_data.iov,
+				 &ep->cur_rx_entry->msg_data.iov_cnt,
+				 (ntohll(rx_hdr->hdr.size) -
+				  sizeof(rx_hdr->hdr)));
 		break;
 	case ofi_op_read_rsp:
-		/* find the entry in remote read queue and place data */
+		if (dlist_empty(&ep->rx_queue))
+			return -FI_EAGAIN;
+
+		entry = ep->rma_read_queue.next;
+		ep->cur_rx_entry = container_of(entry, struct tcpx_pe_entry,
+						entry);
 		break;
+	case ofi_op_read_req:
 	case ofi_op_write:
-		/* place the data at the right place */
+		cq = container_of(ep->util_ep.rx_cq, struct tcpx_cq, util_cq);
+		ep->cur_rx_entry = tcpx_pe_entry_alloc(cq);
 		break;
 	default:
-		break;
+		return -FI_EINVAL;
 	}
+
+	ep->cur_rx_entry->msg_hdr = rx_hdr->hdr;
+	ep->cur_rx_entry->done_len = sizeof(rx_hdr->hdr);
+	return FI_SUCCESS;
 }
 
-static int tcpx_recv_msg_hdr(struct tcpx_pe_entry *pe_entry)
+int tcpx_recv_rx_hdr(struct tcpx_rx_hdr *rx_hdr)
 {
+	struct tcpx_ep *ep = container_of(rx_hdr, struct tcpx_ep, rx_hdr);
 	ssize_t bytes_recvd;
 	void *rem_hdr_buf;
 	size_t rem_hdr_len;
 
-	rem_hdr_buf = (uint8_t *)&pe_entry->msg_hdr + pe_entry->done_len;
-	rem_hdr_len = sizeof(pe_entry->msg_hdr) - pe_entry->done_len;
+	rem_hdr_buf = (uint8_t *)&rx_hdr->hdr + rx_hdr->done_len;
+	rem_hdr_len = sizeof(rx_hdr->hdr) - rx_hdr->done_len;
+
+	if (!rem_hdr_len)
+		goto find_entry;
+
+	bytes_recvd = ofi_recv_socket(ep->conn_fd, rem_hdr_buf,
+				      rem_hdr_len, 0);
+	if (bytes_recvd <= 0)
+		return (bytes_recvd)? -errno: -FI_ENOTCONN;
+
+	rx_hdr->done_len += bytes_recvd;
+
+	if (rx_hdr->done_len < sizeof(rx_hdr->hdr))
+		return -FI_EAGAIN;
+
+find_entry:
+	return tcpx_find_entry(rx_hdr);
+}
+
+static int validate_rma_iov(struct ofi_mr_map *map,
+			    struct tcpx_rma_data *rma_data)
+{
+	int i,ret;
+
+	/* validate rma_iov */
+	for ( i = 0; i < rma_data->rma_iov_cnt ; i++) {
+		ret = ofi_mr_map_verify(map,
+					(uintptr_t *)&rma_data->rma_iov[i].addr,
+					rma_data->rma_iov[i].len,
+					rma_data->rma_iov[i].key,
+					FI_REMOTE_WRITE, NULL);
+		if (ret) {
+			FI_DBG(&tcpx_prov, FI_LOG_EP_DATA,
+			       "remote iov not valid\n");
+			return -FI_EINVAL;
+		}
+	}
+	return FI_SUCCESS;
+}
+
+static int tcpx_recv_rma_iov(struct tcpx_pe_entry *pe_entry,
+			      size_t start_offset)
+{
+	ssize_t bytes_recvd;
+	void *rem_rma_buf;
+	size_t rem_rma_len;
+	int i, ret;
+
+	rem_rma_buf = ((uint8_t *)&pe_entry->rma_data +
+		       (pe_entry->done_len - start_offset));
+	rem_rma_len = (sizeof(pe_entry->rma_data) -
+		       (pe_entry->done_len - start_offset));
 
 	bytes_recvd = ofi_recv_socket(pe_entry->ep->conn_fd,
-				      rem_hdr_buf, rem_hdr_len, 0);
+				      rem_rma_buf, rem_rma_len, 0);
 	if (bytes_recvd <= 0)
 		return (bytes_recvd)? -errno: -FI_ENOTCONN;
 
 	pe_entry->done_len += bytes_recvd;
 
-	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr))
+	if ((pe_entry->done_len - start_offset) <
+	    sizeof(pe_entry->rma_data))
 		return -FI_EAGAIN;
 
-	/* pick the apt pe_entry */
-	tcpx_find_entry(pe_entry);
+	/* validate rma_iov */
+	ret = validate_rma_iov(&pe_entry->ep->util_ep.domain->mr_map,
+			       &pe_entry->rma_data);
+	if (ret) {
+		FI_DBG(&tcpx_prov, FI_LOG_EP_DATA, "remote iov not valid\n");
+	}
 
-	pe_entry->msg_hdr.op_data = TCPX_OP_MSG_RECV;
-	return ofi_truncate_iov(pe_entry->msg_data.iov,
-				&pe_entry->msg_data.iov_cnt,
-				(ntohll(pe_entry->msg_hdr.size) -
-				 sizeof(pe_entry->msg_hdr)));
+	/* copy rma iov to msg iov */
+	if (pe_entry->msg_hdr.op == ofi_op_write) {
+		for ( i = 0; i < pe_entry->rma_data.rma_iov_cnt ; i++) {
+			pe_entry->msg_data.iov[i+1].iov_base =
+				(void *) pe_entry->rma_data.rma_iov[i].addr;
+			pe_entry->msg_data.iov[i+1].iov_len =
+				pe_entry->rma_data.rma_iov[i].len;
+		}
+	} else if (pe_entry->msg_hdr.op == ofi_op_read_req) {
+
+	}
+	return FI_SUCCESS;
 }
 
 int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
@@ -111,8 +198,11 @@ int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 	ssize_t bytes_recvd;
 	int ret;
 
-	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr)) {
-		ret = tcpx_recv_msg_hdr(pe_entry);
+	assert(pe_entry->done_len >= sizeof(pe_entry->msg_hdr));
+
+	if (pe_entry->msg_hdr.op == ofi_op_read_req ||
+	    pe_entry->msg_hdr.op == ofi_op_write) {
+		ret = tcpx_recv_rma_iov(pe_entry, sizeof(pe_entry->msg_hdr));
 		if (ret)
 			return ret;
 	}

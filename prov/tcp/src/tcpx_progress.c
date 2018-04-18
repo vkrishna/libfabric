@@ -117,25 +117,20 @@ done:
 
 static void process_rx_queue(struct tcpx_ep *ep)
 {
+	int ret;
 
-	/* struct tcpx_pe_entry *pe_entry; */
-	/* struct dlist_entry *entry; */
-
-	/* if (dlist_empty(&ep->rx_queue)) */
-	/* 	return; */
-
-	/* entry = ep->rx_queue.next; */
-	/* pe_entry = container_of(entry, struct tcpx_pe_entry, */
-	/* 			entry); */
-	if (!ep->cur_rx_entry) {
-		struct tcpx_cq *tcpx_cq = container_of(ep->util_ep.rx_cq,
-						       struct tcpx_cq,
-						       util_cq);
-
-		ep->cur_rx_entry = tcpx_pe_entry_alloc(tcpx_cq);
+	if (ep->cur_rx_entry) {
+		process_rx_pe_entry(ep->cur_rx_entry);
+		return;
 	}
 
-	process_rx_pe_entry(ep->cur_rx_entry);
+	ret = tcpx_recv_rx_hdr(&ep->rx_hdr);
+	if (OFI_SOCK_TRY_SND_RCV_AGAIN(-ret))
+		return;
+
+	if (ret == -FI_ENOTCONN)
+		tcpx_ep_shutdown_report(ep, &ep->util_ep.ep_fid.fid);
+	return;
 }
 
 static void process_tx_queue(struct tcpx_ep *ep)

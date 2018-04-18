@@ -96,6 +96,8 @@ void tcpx_pe_entry_release(struct tcpx_pe_entry *pe_entry)
 	fastlock_acquire(&cq->cq_lock);
 	dlist_remove(&pe_entry->entry);
 	util_buf_release(tcpx_cq->pe_entry_pool, pe_entry);
+	pe_entry->ep->cur_rx_entry = NULL;
+	pe_entry->ep->rx_hdr.done_len = 0;
 	fastlock_release(&cq->cq_lock);
 }
 
