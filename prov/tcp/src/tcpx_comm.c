@@ -57,42 +57,29 @@ int tcpx_send_msg(struct tcpx_pe_entry *pe_entry)
 	return FI_SUCCESS;
 }
 
-static int tcpx_recv_msg_hdr(struct tcpx_pe_entry *pe_entry)
+int tcpx_recv_field(SOCKET sock, void *buf, size_t buf_len,
+		    uint64_t *done_len, size_t start_offset)
 {
+	void *rem_buf;
+	size_t rem_len;
 	ssize_t bytes_recvd;
-	void *rem_hdr_buf;
-	size_t rem_hdr_len;
 
-	rem_hdr_buf = (uint8_t *)&pe_entry->msg_hdr + pe_entry->done_len;
-	rem_hdr_len = sizeof(pe_entry->msg_hdr) - pe_entry->done_len;
+	rem_buf = (uint8_t *) buf + (*done_len - start_offset);
+	rem_len = buf_len - (*done_len - start_offset);
 
-	bytes_recvd = ofi_recv_socket(pe_entry->ep->conn_fd,
-				      rem_hdr_buf, rem_hdr_len, 0);
+	bytes_recvd = ofi_recv_socket(sock, rem_buf, rem_len, 0);
 	if (bytes_recvd <= 0)
 		return (bytes_recvd)? -errno: -FI_ENOTCONN;
 
-	pe_entry->done_len += bytes_recvd;
-
-	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr))
-		return -FI_EAGAIN;
-
-	pe_entry->msg_hdr.op_data = TCPX_OP_MSG_RECV;
-	return ofi_truncate_iov(pe_entry->msg_data.iov,
-				&pe_entry->msg_data.iov_cnt,
-				(ntohll(pe_entry->msg_hdr.size) -
-				 sizeof(pe_entry->msg_hdr)));
+	*done_len += bytes_recvd;
+	return (buf_len - (*done_len - start_offset))?
+		-FI_EAGAIN: FI_SUCCESS;
 }
+
 
 int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 {
 	ssize_t bytes_recvd;
-	int ret;
-
-	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr)) {
-		ret = tcpx_recv_msg_hdr(pe_entry);
-		if (ret)
-			return ret;
-	}
 
 	bytes_recvd = ofi_readv_socket(pe_entry->ep->conn_fd,
 				       pe_entry->msg_data.iov,
