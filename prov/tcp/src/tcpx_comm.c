@@ -76,17 +76,77 @@ int tcpx_recv_field(SOCKET sock, void *buf, size_t buf_len,
 		-FI_EAGAIN: FI_SUCCESS;
 }
 
+static int tcpx_process_read_req(struct tcpx_pe_entry *pe_entry)
+{
+	return -FI_ENODATA;
+}
+
+static int tcpx_process_read_rsp(struct tcpx_pe_entry *pe_entry)
+{
+	return -FI_ENODATA;
+}
+
+static int tcpx_process_write(struct tcpx_pe_entry *pe_entry)
+{
+	return -FI_ENODATA;
+}
+
+static int tcpx_validate_rma_data(struct tcpx_pe_entry *pe_entry)
+{
+	return -FI_ENODATA;
+}
+static int tcpx_process_rma_data(struct tcpx_pe_entry *pe_entry)
+{
+	int ret;
+
+	ret = tcpx_recv_field(pe_entry->ep->conn_fd, (void *) &pe_entry->rma_data,
+			      sizeof(pe_entry->rma_data), &pe_entry->done_len,
+			      sizeof(pe_entry->msg_hdr));
+	if (ret)
+		return ret;
+
+	ret = tcpx_validate_rma_data(pe_entry);
+	if (ret)
+		return ret;
+
+	switch (pe_entry->msg_hdr.op) {
+	case ofi_op_read_req:
+		ret = tcpx_process_read_req(pe_entry);
+		break;
+	case ofi_op_read_rsp:
+		ret = tcpx_process_read_rsp(pe_entry);
+		break;
+	case ofi_op_write:
+		ret = tcpx_process_write(pe_entry);
+		break;
+	default:
+		return -FI_EINVAL;
+	}
+	return ret;
+}
 
 int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 {
 	ssize_t bytes_recvd;
+	int ret;
+
+	if (pe_entry->done_len < (sizeof(pe_entry->msg_hdr) +
+				  sizeof(pe_entry->rma_data))) {
+		switch (pe_entry->msg_hdr.op) {
+		case ofi_op_read_req:
+		case ofi_op_read_rsp:
+		case ofi_op_write:
+			ret = tcpx_process_rma_data(pe_entry);
+			if (ret)
+				return ret;
+		}
+	}
 
 	bytes_recvd = ofi_readv_socket(pe_entry->ep->conn_fd,
 				       pe_entry->msg_data.iov,
 				       pe_entry->msg_data.iov_cnt);
 	if (bytes_recvd <= 0)
 		return (bytes_recvd)? -errno: -FI_ENOTCONN;
-
 
 	if (pe_entry->done_len < ntohll(pe_entry->msg_hdr.size)) {
 		ofi_consume_iov(pe_entry->msg_data.iov,

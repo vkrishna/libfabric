@@ -213,18 +213,23 @@ struct tcpx_fabric {
 	pthread_t		conn_mgr_thread;
 };
 
+struct tcpx_rma_data {
+	size_t			rma_iov_cnt;
+	union {
+		struct fi_rma_iov	rma_iov[TCPX_IOV_LIMIT];
+		struct fi_rma_ioc	rma_ioc[TCPX_IOV_LIMIT];
+	};
+};
+
 struct tcpx_msg_data {
 	size_t		iov_cnt;
-	union {
-		struct iovec		iov[TCPX_IOV_LIMIT+1];
-		struct fi_rma_iov	rma_iov[TCPX_IOV_LIMIT+1];
-		struct fi_rma_ioc	rma_ioc[TCPX_IOV_LIMIT+1];
-	};
+	struct iovec		iov[TCPX_IOV_LIMIT+1];
 	uint8_t			inject[TCPX_MAX_INJECT_SZ];
 };
 
 struct tcpx_pe_entry {
 	struct ofi_op_hdr	msg_hdr;
+	struct tcpx_rma_data	rma_data;
 	struct tcpx_msg_data	msg_data;
 	struct dlist_entry	entry;
 	struct tcpx_ep		*ep;

@@ -122,8 +122,11 @@ static struct tcpx_pe_entry * tcpx_get_rx_pe_entry(struct tcpx_rx_hdr *rx_hdr)
 	struct tcpx_pe_entry *pe_entry = NULL;
 	struct dlist_entry *entry;
 	struct tcpx_ep *tcpx_ep;
+	struct tcpx_cq *tcpx_cq;
 
 	tcpx_ep = container_of(rx_hdr, struct tcpx_ep, rx_hdr);
+	tcpx_cq = container_of(tcpx_ep->util_ep.rx_cq, struct tcpx_cq,
+			       util_cq);
 
 	switch (rx_hdr->hdr.op) {
 	case ofi_op_msg:
@@ -146,14 +149,22 @@ static struct tcpx_pe_entry * tcpx_get_rx_pe_entry(struct tcpx_rx_hdr *rx_hdr)
 
 		break;
 	case ofi_op_read_req:
-	case ofi_op_read_rsp:
 	case ofi_op_write:
-	case ofi_op_write_rsp:
-		/* todo  complete these cases for rma*/
+		pe_entry = tcpx_pe_entry_alloc(tcpx_cq);
+		if (!pe_entry)
+			return NULL;
+
+		pe_entry->msg_hdr = rx_hdr->hdr;
+		pe_entry->msg_hdr.op_data = TCPX_OP_MSG_RECV;
+		pe_entry->ep = tcpx_ep;
+		pe_entry->flags = TCPX_NO_COMPLETION;
+		pe_entry->done_len = sizeof(rx_hdr->hdr);
+		break;
+	case ofi_op_read_rsp:
+		/* todo complete this case */
 	default:
 		return NULL;
 	}
-
 	rx_hdr->done_len = 0;
 	return pe_entry;
 }
