@@ -93,8 +93,38 @@ static int tcpx_process_write(struct tcpx_pe_entry *pe_entry)
 
 static int tcpx_validate_rma_data(struct tcpx_pe_entry *pe_entry)
 {
-	return -FI_ENODATA;
+	struct ofi_mr_map *map = &pe_entry->ep->util_ep.domain->mr_map;
+	struct fi_rma_iov *rma_iov = pe_entry->rma_data.rma_iov;
+	uint64_t access;
+	int i, ret;
+
+	switch (pe_entry->msg_hdr.op) {
+	case ofi_op_read_req:
+		access = FI_REMOTE_READ;
+		break;
+	case ofi_op_read_rsp:
+	case ofi_op_write:
+		access = FI_REMOTE_WRITE;
+		break;
+	default:
+		return -FI_EINVAL;
+	}
+
+	for ( i = 0 ; i < pe_entry->rma_data.rma_iov_cnt ; i++) {
+		ret = ofi_mr_map_verify(map,
+					(uintptr_t *)&rma_iov[i].addr,
+					rma_iov[i].len,
+					rma_iov[i].key,
+					access, NULL);
+		if (ret) {
+			FI_DBG(&tcpx_prov, FI_LOG_EP_DATA,
+			       "invalid rma iov received\n");
+			return -FI_EINVAL;
+		}
+	}
+	return FI_SUCCESS;
 }
+
 static int tcpx_process_rma_data(struct tcpx_pe_entry *pe_entry)
 {
 	int ret;
@@ -107,6 +137,7 @@ static int tcpx_process_rma_data(struct tcpx_pe_entry *pe_entry)
 
 	ret = tcpx_validate_rma_data(pe_entry);
 	if (ret)
+		/* todo process failure. send response*/
 		return ret;
 
 	switch (pe_entry->msg_hdr.op) {
