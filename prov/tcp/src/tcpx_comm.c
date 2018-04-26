@@ -88,7 +88,16 @@ static int tcpx_process_read_rsp(struct tcpx_pe_entry *pe_entry)
 
 static int tcpx_process_write(struct tcpx_pe_entry *pe_entry)
 {
-	return -FI_ENODATA;
+	int i;
+
+	pe_entry->msg_data.iov_cnt = pe_entry->rma_data.rma_iov_cnt;
+	for ( i = 0 ; i < pe_entry->rma_data.rma_iov_cnt ; i++ ) {
+		pe_entry->msg_data.iov[i].iov_base =
+			(void *) pe_entry->rma_data.rma_iov[i].addr;
+		pe_entry->msg_data.iov[i].iov_len =
+			pe_entry->rma_data.rma_iov[i].len;
+	}
+	return FI_SUCCESS;
 }
 
 static int tcpx_validate_rma_data(struct tcpx_pe_entry *pe_entry)

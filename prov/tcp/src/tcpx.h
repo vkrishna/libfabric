@@ -222,8 +222,8 @@ struct tcpx_rma_data {
 };
 
 struct tcpx_msg_data {
-	size_t		iov_cnt;
-	struct iovec		iov[TCPX_IOV_LIMIT+1];
+	size_t			iov_cnt;
+	struct iovec		iov[TCPX_IOV_LIMIT+2];
 	uint8_t			inject[TCPX_MAX_INJECT_SZ];
 };
 

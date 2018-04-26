@@ -113,7 +113,9 @@ err:
 done:
 	tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
 				  pe_entry, ret);
-	dlist_remove(&pe_entry->entry);
+	if (!((pe_entry->entry.next == NULL) &&
+	      (pe_entry->entry.prev == NULL)))
+		dlist_remove(&pe_entry->entry);
 	tcpx_pe_entry_release(pe_entry);
 }
 
