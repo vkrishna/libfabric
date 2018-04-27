@@ -62,7 +62,7 @@ static struct fi_domain_attr tcpx_domain_attr = {
 	.name = "tcp",
 	.threading = FI_THREAD_SAFE,
 	.control_progress = FI_PROGRESS_AUTO,
-	.data_progress = FI_PROGRESS_AUTO,
+	.data_progress = FI_PROGRESS_MANUAL,
 	.resource_mgmt = FI_RM_ENABLED,
 	.av_type = FI_AV_UNSPEC,
 	.mr_mode = 0,
@@ -81,8 +81,8 @@ static struct fi_fabric_attr tcpx_fabric_attr = {
 
 struct fi_info tcpx_info = {
 	.caps = FI_MSG | FI_SEND | FI_RECV |
-	FI_RMA | FI_WRITE | FI_REMOTE_READ |
-	FI_REMOTE_WRITE,
+	FI_RMA | FI_WRITE | FI_READ |
+	FI_REMOTE_READ | FI_REMOTE_WRITE,
 	.addr_format = FI_SOCKADDR,
 	.tx_attr = &tcpx_tx_attr,
 	.rx_attr = &tcpx_rx_attr,

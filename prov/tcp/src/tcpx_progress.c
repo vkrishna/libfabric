@@ -111,7 +111,11 @@ err:
 					&pe_entry->ep->util_ep.ep_fid.fid);
 	}
 done:
-	tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
+	if (pe_entry->msg_hdr.op == ofi_op_read_rsp)
+		tcpx_cq_report_completion(pe_entry->ep->util_ep.tx_cq,
+				  pe_entry, ret);
+	else
+		tcpx_cq_report_completion(pe_entry->ep->util_ep.rx_cq,
 				  pe_entry, ret);
 	if (!((pe_entry->entry.next == NULL) &&
 	      (pe_entry->entry.prev == NULL)))
@@ -152,22 +156,39 @@ static struct tcpx_pe_entry * tcpx_get_rx_pe_entry(struct tcpx_rx_hdr *rx_hdr)
 		break;
 	case ofi_op_read_req:
 	case ofi_op_write:
+
 		pe_entry = tcpx_pe_entry_alloc(tcpx_cq);
 		if (!pe_entry)
 			return NULL;
 
 		pe_entry->msg_hdr = rx_hdr->hdr;
-		pe_entry->msg_hdr.op_data = TCPX_OP_MSG_RECV;
+		pe_entry->msg_hdr.op_data = TCPX_OP_MSG_SEND;
 		pe_entry->ep = tcpx_ep;
 		pe_entry->flags = TCPX_NO_COMPLETION;
 		pe_entry->done_len = sizeof(rx_hdr->hdr);
 		break;
 	case ofi_op_read_rsp:
-		/* todo complete this case */
+		if (dlist_empty(&tcpx_ep->rma_list.list))
+			return NULL;
+
+		dlist_foreach(&tcpx_ep->rma_list.list, entry) {
+		pe_entry = container_of(entry, struct tcpx_pe_entry,
+					entry);
+		if (pe_entry->msg_hdr.remote_idx == ntohll(rx_hdr->hdr.remote_idx))
+			break;
+		}
+
+		if (pe_entry->msg_hdr.remote_idx != ntohll(rx_hdr->hdr.remote_idx))
+			goto out;
+
+		pe_entry->msg_hdr.op_data = TCPX_OP_MSG_SEND;
+		pe_entry->done_len = sizeof(rx_hdr->hdr);
+		break;
 	default:
 		return NULL;
 	}
 	rx_hdr->done_len = 0;
+out:
 	return pe_entry;
 }
 

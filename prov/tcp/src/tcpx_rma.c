@@ -49,10 +49,92 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+static void tcpx_rma_read_send_entry_fill(struct tcpx_pe_entry *send_entry,
+					  struct tcpx_ep *tcpx_ep,
+					  const struct fi_msg_rma *msg)
+{
+	send_entry->msg_hdr.version = OFI_CTRL_VERSION;
+	send_entry->msg_hdr.op = ofi_op_read_req;
+	send_entry->msg_hdr.size = htonll(sizeof(send_entry->msg_hdr) +
+					  sizeof(send_entry->rma_data));
+
+	memcpy(send_entry->rma_data.rma_iov, msg->rma_iov,
+	       msg->rma_iov_count * sizeof(msg->rma_iov[0]));
+
+	send_entry->rma_data.rma_iov_cnt = msg->rma_iov_count;
+
+	send_entry->msg_data.iov[0].iov_base = (void *) &send_entry->msg_hdr;
+	send_entry->msg_data.iov[0].iov_len = sizeof(send_entry->msg_hdr);
+	send_entry->msg_data.iov[1].iov_base = (void *) &send_entry->rma_data;
+	send_entry->msg_data.iov[1].iov_len = sizeof(send_entry->rma_data);
+	send_entry->msg_data.iov_cnt =  2;
+
+	send_entry->flags |= TCPX_NO_COMPLETION;
+	send_entry->msg_hdr.flags = htonl(send_entry->msg_hdr.flags);
+	send_entry->ep = tcpx_ep;
+	send_entry->context = msg->context;
+	send_entry->done_len = 0;
+}
+
+static void tcpx_rma_read_recv_entry_fill(struct tcpx_pe_entry *recv_entry,
+					  struct tcpx_ep *tcpx_ep,
+					  const struct fi_msg_rma *msg)
+{
+	uint64_t data_len;
+
+	data_len = ofi_total_iov_len(msg->msg_iov, msg->iov_count);
+
+	recv_entry->msg_hdr.version = OFI_CTRL_VERSION;
+	recv_entry->msg_hdr.op = ofi_op_read_rsp;
+	recv_entry->msg_hdr.size = htonll(sizeof(recv_entry->msg_hdr) +
+					  data_len);
+	recv_entry->msg_hdr.flags = 0;
+	recv_entry->ep = tcpx_ep;
+	recv_entry->context = msg->context;
+	recv_entry->done_len = 0;
+	recv_entry->flags = 0;
+	memcpy(&recv_entry->msg_data.iov[0], &msg->msg_iov[0],
+	       msg->iov_count * sizeof(struct iovec));
+
+	recv_entry->msg_data.iov_cnt = msg->iov_count;
+}
+
 static ssize_t tcpx_rma_readmsg(struct fid_ep *ep, const struct fi_msg_rma *msg,
 		uint64_t flags)
 {
-	return -FI_ENODATA;
+	struct tcpx_ep *tcpx_ep;
+	struct tcpx_cq *tcpx_cq;
+	struct tcpx_pe_entry *send_entry;
+	struct tcpx_pe_entry *recv_entry;
+
+	tcpx_ep = container_of(ep, struct tcpx_ep, util_ep.ep_fid);
+	tcpx_cq = container_of(tcpx_ep->util_ep.tx_cq, struct tcpx_cq,
+			       util_cq);
+
+	assert(msg->iov_count <= TCPX_IOV_LIMIT);
+	assert(msg->rma_iov_count <= TCPX_IOV_LIMIT);
+
+	send_entry = tcpx_pe_entry_alloc(tcpx_cq);
+	if (!send_entry)
+		return -FI_EAGAIN;
+
+	recv_entry = tcpx_pe_entry_alloc(tcpx_cq);
+	if (!recv_entry) {
+		send_entry->msg_hdr.op_data = TCPX_OP_MSG_SEND;
+		tcpx_pe_entry_release(send_entry);
+		return -FI_EAGAIN;
+	}
+	tcpx_rma_read_send_entry_fill(send_entry, tcpx_ep, msg);
+	tcpx_rma_read_recv_entry_fill(recv_entry, tcpx_ep, msg);
+
+	fastlock_acquire(&tcpx_ep->queue_lock);
+	recv_entry->msg_hdr.remote_idx = tcpx_ep->rma_list.counter;
+	send_entry->msg_hdr.remote_idx = htonll(tcpx_ep->rma_list.counter++);
+	recv_entry->flags = flags;
+	dlist_insert_tail(&recv_entry->entry, &tcpx_ep->rma_list.list);
+	dlist_insert_tail(&send_entry->entry, &tcpx_ep->tx_queue);
+	fastlock_release(&tcpx_ep->queue_lock);
+	return FI_SUCCESS;
 }
 
 static ssize_t tcpx_rma_read(struct fid_ep *ep, void *buf, size_t len, void *desc,
@@ -134,7 +216,7 @@ static ssize_t tcpx_rma_writemsg(struct fid_ep *ep, const struct fi_msg_rma *msg
 	send_entry->msg_data.iov[0].iov_base = (void *) &send_entry->msg_hdr;
 	send_entry->msg_data.iov[0].iov_len = sizeof(send_entry->msg_hdr);
 
-	assert(msg->rma_iov_count < TCPX_IOV_LIMIT);
+	assert(msg->rma_iov_count <= TCPX_IOV_LIMIT);
 	memcpy(send_entry->rma_data.rma_iov, msg->rma_iov,
 	       msg->rma_iov_count * sizeof(msg->rma_iov[0]));
 	send_entry->rma_data.rma_iov_cnt = msg->rma_iov_count;

@@ -78,12 +78,46 @@ int tcpx_recv_field(SOCKET sock, void *buf, size_t buf_len,
 
 static int tcpx_process_read_req(struct tcpx_pe_entry *pe_entry)
 {
-	return -FI_ENODATA;
-}
 
-static int tcpx_process_read_rsp(struct tcpx_pe_entry *pe_entry)
-{
-	return -FI_ENODATA;
+	struct tcpx_ep *tcpx_ep = pe_entry->ep;
+	struct tcpx_cq *tcpx_cq;
+	struct tcpx_pe_entry *send_entry;
+	int i;
+
+	tcpx_cq = container_of(tcpx_ep->util_ep.tx_cq,
+			       struct tcpx_cq,
+			       util_cq);
+
+	send_entry = tcpx_pe_entry_alloc(tcpx_cq);
+	if (!send_entry)
+		return -FI_EAGAIN;
+
+	send_entry->msg_data.iov[0].iov_base = (void *) &send_entry->msg_hdr;
+	send_entry->msg_data.iov[0].iov_len = sizeof(send_entry->msg_hdr);
+	send_entry->msg_data.iov_cnt = 1 + pe_entry->rma_data.rma_iov_cnt;
+
+	for ( i = 0 ; i < pe_entry->rma_data.rma_iov_cnt ; i++ ) {
+		send_entry->msg_data.iov[i+1].iov_base =
+			(void *) pe_entry->rma_data.rma_iov[i].addr;
+		send_entry->msg_data.iov[i+1].iov_len =
+			pe_entry->rma_data.rma_iov[i].len;
+	}
+
+	send_entry->msg_hdr.version = OFI_CTRL_VERSION;
+	send_entry->msg_hdr.op = ofi_op_read_rsp;
+	send_entry->msg_hdr.op_data = TCPX_OP_MSG_SEND;
+	send_entry->msg_hdr.size =
+		htonll(ofi_total_iov_len(send_entry->msg_data.iov,
+					 send_entry->msg_data.iov_cnt));
+	send_entry->flags |= TCPX_NO_COMPLETION;
+	send_entry->msg_hdr.flags = htonl(send_entry->msg_hdr.flags);
+	send_entry->msg_hdr.remote_idx = pe_entry->msg_hdr.remote_idx;
+	send_entry->ep = tcpx_ep;
+	send_entry->context = NULL;
+	send_entry->done_len = 0;
+
+	dlist_insert_tail(&send_entry->entry, &tcpx_ep->tx_queue);
+	return FI_SUCCESS;
 }
 
 static int tcpx_process_write(struct tcpx_pe_entry *pe_entry)
@@ -153,9 +187,6 @@ static int tcpx_process_rma_data(struct tcpx_pe_entry *pe_entry)
 	case ofi_op_read_req:
 		ret = tcpx_process_read_req(pe_entry);
 		break;
-	case ofi_op_read_rsp:
-		ret = tcpx_process_read_rsp(pe_entry);
-		break;
 	case ofi_op_write:
 		ret = tcpx_process_write(pe_entry);
 		break;
@@ -174,13 +205,15 @@ int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 				  sizeof(pe_entry->rma_data))) {
 		switch (pe_entry->msg_hdr.op) {
 		case ofi_op_read_req:
-		case ofi_op_read_rsp:
 		case ofi_op_write:
 			ret = tcpx_process_rma_data(pe_entry);
 			if (ret)
 				return ret;
 		}
 	}
+
+	if (pe_entry->done_len == ntohll(pe_entry->msg_hdr.size))
+		goto out;
 
 	bytes_recvd = ofi_readv_socket(pe_entry->ep->conn_fd,
 				       pe_entry->msg_data.iov,
@@ -195,5 +228,6 @@ int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 	}
 
 	pe_entry->done_len += bytes_recvd;
+out:
 	return FI_SUCCESS;
 }
