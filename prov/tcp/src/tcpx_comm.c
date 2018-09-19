@@ -53,6 +53,7 @@ int tcpx_send_msg(struct tcpx_pe_entry *pe_entry)
 				bytes_sent);
 	}
 
+	/* FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,"bytes_sent on n/w = %d\n", bytes_sent); */
 	pe_entry->done_len += bytes_sent;
 	return FI_SUCCESS;
 }
@@ -72,6 +73,7 @@ static int tcpx_recv_msg_hdr(struct tcpx_pe_entry *pe_entry)
 		return (bytes_recvd)? -errno: -FI_ENOTCONN;
 
 	pe_entry->done_len += bytes_recvd;
+	/* FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,"bytes_recvd on n/w = %d\n", bytes_recvd); */
 
 	if (pe_entry->done_len < sizeof(pe_entry->msg_hdr))
 		return -FI_EAGAIN;
@@ -106,7 +108,7 @@ int tcpx_recv_msg(struct tcpx_pe_entry *pe_entry)
 				&pe_entry->msg_data.iov_cnt,
 				bytes_recvd);
 	}
-
+	/* FI_WARN(&tcpx_prov, FI_LOG_DOMAIN,"bytes_recvd on n/w = %d\n", bytes_recvd); */
 	pe_entry->done_len += bytes_recvd;
 	return FI_SUCCESS;
 }
