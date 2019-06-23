@@ -57,7 +57,8 @@ bin_PROGRAMS = \
 	unit/fi_dom_test \
 	unit/fi_getinfo_test \
 	unit/fi_resource_freeing \
-	ubertest/fi_ubertest
+	ubertest/fi_ubertest	\
+	hpcs/fi_multinode
 
 dist_bin_SCRIPTS = \
 	scripts/runfabtests.sh \
@@ -99,7 +100,11 @@ nobase_dist_config_DATA = \
 	test_configs/shm/verify.test \
 	test_configs/efa/efa.exclude
 
-noinst_LTLIBRARIES = libfabtests.la
+noinst_LTLIBRARIES = libfabtests.la \
+	libcore.la \
+	libpattern.la \
+	libharness.la
+
 libfabtests_la_SOURCES = \
 	common/shared.c \
 	common/jsmn.c \
@@ -107,10 +112,6 @@ libfabtests_la_SOURCES = \
 	include/jsmn.h \
 	include/unix/osd.h \
 	include/ft_osd.h
-
-if HPCS
-SUBDIRS = . hpcs
-endif
 
 benchmarks_srcs = \
 	benchmarks/benchmark_shared.h \
@@ -340,6 +341,44 @@ ubertest_fi_ubertest_SOURCES = \
 	ubertest/verify.c \
 	ubertest/test_ctrl.c
 ubertest_fi_ubertest_LDADD = libfabtests.la
+
+libcore_la_SOURCES = \
+	hpcs/src/core/core.c \
+	hpcs/include/core/user.h
+
+libcore_la_CFLAGS = \
+	$(AM_CFLAGS) \
+	-I$(srcdir)/hpcs/include
+
+libharness_la_SOURCES = \
+	hpcs/src/harness/harness.c
+
+libharness_la_CFLAGS = \
+	$(AM_CFLAGS) \
+	-I$(srcdir)/hpcs/include
+
+libpattern_la_SOURCES = \
+	hpcs/src/pattern/alltoall.c \
+	hpcs/src/pattern/self.c \
+	hpcs/src/pattern/alltoone.c \
+	hpcs/src/pattern/ring.c \
+	hpcs/include/pattern/user.h \
+	hpcs/src/pattern/util.h
+
+libpattern_la_CFLAGS = $(libcore_la_CFLAGS)
+
+hpcs_fi_multinode_SOURCES = \
+	hpcs/src/test/sendrecv.c \
+	hpcs/src/test/generic.c \
+	hpcs/include/test/user.h
+
+hpcs_fi_multinode_LDADD = \
+	libfabtests.la \
+	libharness.la \
+	libcore.la \
+	libpattern.la
+
+hpcs_fi_multinode_CFLAGS = $(libcore_la_CFLAGS)
 
 real_man_pages = \
 	 man/man7/fabtests.7
