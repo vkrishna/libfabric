@@ -270,7 +270,7 @@ static int init_domain(const struct arguments *arguments,
 		struct fid_fabric *fabric,
 		struct fi_info *info,
 		struct domain_state *domain_state,
-		struct job *job)
+		struct pm_job_info *job)
 {
 	int ret;
 	int i;
@@ -340,7 +340,7 @@ static int init_domain(const struct arguments *arguments,
 		goto err;
 	}
 
-	ret = job->address_exchange(&our_name, names, len, job->ranks);
+	ret = job->allgather(&our_name, names, len, job);
 	if (ret) {
 		hpcs_error("error exchanging addresses\n");
 		goto err;
@@ -377,7 +377,7 @@ static int init_ofi(
 		const void *test_arguments,
 		const struct test_config *test_config,
 		struct ofi_state *ofi_state,
-		struct job *job)
+		struct pm_job_info *job)
 {
 	int ret;
 	struct fi_info *hints;
@@ -725,7 +725,7 @@ static void free_arguments (struct arguments *arguments)
  */
 static int core_setup_target_mr(struct domain_state *domain_state,
 		struct arguments *args, struct test_config *config,
-		struct job *job, struct fid_mr **rx_mr,
+		struct pm_job_info *job, struct fid_mr **rx_mr,
 		uint8_t *rx_buf, uint64_t *keys)
 {
 	uint64_t my_key;
@@ -748,7 +748,7 @@ static int core_setup_target_mr(struct domain_state *domain_state,
 	}
 
 	my_key = fi_mr_key(*rx_mr);
-	job->address_exchange(&my_key, keys, sizeof(uint64_t), job->ranks);
+	job->allgather(&my_key, keys, sizeof(uint64_t), job);
 
 	if (verbose) {
 		hpcs_verbose("mr key exchange complete: rank %ld my_key %ld len %ld keys: ",
@@ -785,7 +785,7 @@ static int core_setup_target_mr(struct domain_state *domain_state,
 	if (ret)
 		hpcs_error("fi_mr_enable failed: %d\n", ret);
 
-	job->barrier();
+	job->barrier(job);
 
 	return 0;
 }
@@ -850,7 +850,7 @@ static int core_initiate_rx(struct domain_state *domain_state,
 		struct pattern_api *pattern,
 		struct test_api *test,
 		struct test_config *test_config,
-		struct job *job,
+		struct pm_job_info *job,
 		struct core_state *state)
 {
 	int ret, prev, prev_threshold;
@@ -951,7 +951,7 @@ static int core_initiate_tx(struct domain_state *domain_state,
 		struct pattern_api *pattern,
 		struct test_api *test,
 		struct test_config *test_config,
-		struct job *job,
+		struct pm_job_info *job,
 		struct core_state *state)
 {
 	int ret, i, prev, prev_threshold;
@@ -1074,7 +1074,7 @@ static int core_completion(struct domain_state *domain_state,
 		struct pattern_api *pattern,
 		struct test_api *test,
 		struct test_config *test_config,
-		struct job *job,
+		struct pm_job_info *job,
 		struct core_state *state)
 {
 	int ret, i;
@@ -1250,7 +1250,7 @@ static int core_inner(struct domain_state *domain_state,
 		struct pattern_api *pattern,
 		struct test_api *test,
 		struct test_config *test_config,
-		struct job *job)
+		struct pm_job_info *job)
 {
 	int ret;
 	size_t i, j;
@@ -1380,8 +1380,8 @@ static int core_inner(struct domain_state *domain_state,
 	return 0;
 }
 
-
-int core(const int argc, char * const *argv, struct job *job)
+int core(const int argc, char * const *argv,
+	 struct pm_job_info *job)
 {
 	int ret, cleanup_ret;
 

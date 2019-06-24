@@ -45,16 +45,16 @@
  * -----------------------------------------------------------------------------
  */
 
-/* wrapper around MPI callbacks and job metadata */
-struct job {
-	/* type signature of address exchange callback that harness passes to core */
-	int (*address_exchange) (void *my_address,
-				void *addresses,
-				 int size, int count);
-	/* synchronization barrier callback signature */
-	void (*barrier) ();
-	size_t			rank;
-	size_t			ranks;
+struct pm_job_info {
+	size_t		rank;
+	size_t		ranks;
+	int		sock;
+	int		*clients; //only valid for server
+	struct sockaddr *oob_server_addr;
+	void		*addrs;
+	int (*allgather)(void *my_address, void *addrs,
+			 int size, struct pm_job_info *pm_job);
+	void (*barrier)();
 };
 
 /*
@@ -77,7 +77,7 @@ struct job {
  *  barrier: MPI barrier function.
  */
 
-int core(const int argc, char * const *argv, struct job *job);
+int core(const int argc, char * const *argv, struct pm_job_info *job);
 
 void hpcs_error(const char* format, ...);
 void hpcs_verbose(const char* format, ...);

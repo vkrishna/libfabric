@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2018 Intel Corporation. All rights reserved.
+ * Copyright (c) 2019 Intel Corporation. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -30,99 +30,226 @@
  * SOFTWARE.
  */
 
-#include <mpi.h>
 #include <stdio.h>
 #include <errno.h>
+#include <shared.h>
+#include <unistd.h>
 #include <string.h>
+#include <errno.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <core/user.h>
 
-static int num_ranks = 0;
-static int our_rank = 0;
-
-/*
- * We'd like to keep mpi dependencies out of core and libfabric dependencies
- * out of harness, so when core needs to exchange addresses it does so via
- * this callback routine passed into core's main loop.
- */
-int address_exchange(void *my_address, void *addresses, int size, int count)
+static inline ssize_t socket_send(int sock, void *buf, size_t len, int flags)
 {
-	int ret;
+	ssize_t ret;
+	size_t m = 0;
+	uint8_t *ptr = (uint8_t *) buf;
 
-	if (count != num_ranks)
-		return EXIT_FAILURE;
+	do {
+		ret = send(sock, (void *) &ptr[m], len-m, flags);
+		if (ret < 0)
+			return ret;
 
-	ret = MPI_Allgather(my_address, size, MPI_BYTE,
-			addresses, size, MPI_BYTE,
-			MPI_COMM_WORLD);
+		m += ret;
+	} while (m != len);
 
+	return len;
+}
+
+static inline int socket_recv(int sock, void *buf, size_t len, int flags)
+{
+	ssize_t ret;
+	size_t m = 0;
+	uint8_t *ptr = (uint8_t *) buf;
+
+	do {
+		ret = recv(sock, (void *) &ptr[m], len-m, flags);
+		if (ret <= 0)
+			return -1;
+
+		m += ret;
+	} while (m < len);
+
+	return len;
+}
+
+static int pm_allgather(void *my_address, void *addrs, int size,
+			struct pm_job_info *pm_job)
+{
+	int i, ret;
+	uint8_t *offset;
+
+	pm_job->addrs = calloc(pm_job->ranks, size);
+	if (!pm_job->addrs)
+		return -FI_ENOMEM;
+
+	/* client */
+	if (!pm_job->clients) {
+		ret = socket_send(pm_job->sock, my_address, size, 0);
+		if (ret < 0)
+		return errno == EPIPE ? -FI_ENOTCONN : -errno;
+
+		ret = socket_recv(pm_job->sock, pm_job->addrs,
+			   pm_job->ranks*size, 0);
+		if (ret <= 0)
+			return (ret)? -errno : -FI_ENOTCONN;
+
+		return 0;
+	}
+
+	/* server */
+	memcpy(pm_job->addrs, my_address, size);
+
+	for (i = 0; i < pm_job->ranks-1; i++) {
+		offset = (uint8_t *)pm_job->addrs +
+			size * (i+1);
+		ret = socket_recv(pm_job->clients[i], (void *)offset, size, 0);
+		if (ret <= 0)
+			return ret;
+	}
+
+	for (i = 0; i < pm_job->ranks-1; i++) {
+		ret = socket_send(pm_job->clients[i], pm_job->addrs,
+				  pm_job->ranks*size, 0);
+		if (ret < 0)
+		    return ret;
+	}
+	return 0;
+}
+
+static void pm_barrier(struct pm_job_info *pm_job)
+{
+	char ch;
+	char chs[pm_job->ranks];
+
+	pm_job->allgather(&ch, chs, 1, pm_job);
+}
+
+static int server_init(struct pm_job_info *pm_job)
+{
+	int new_sock;
+	int ret, i = 0;
+
+	ret = listen(pm_job->sock, pm_job->ranks);
 	if (ret)
-		fprintf(stderr, "address exchange failed, ret=%d\n", ret);
+		return ret;
 
-	return ret;
+	pm_job->clients = calloc(pm_job->ranks, sizeof(int));
+	if (!pm_job->clients)
+		return -FI_ENOMEM;
+
+	while (i < pm_job->ranks-1 &&
+	       (new_sock = accept(pm_job->sock, NULL, NULL))) {
+		if (new_sock < 0) {
+			fprintf(stderr, "error during server init\n");
+			goto err;
+		}
+		pm_job->clients[i] = new_sock;
+		i++;
+		fprintf(stderr,"connection established\n");
+	}
+
+	close(pm_job->sock);
+	return 0;
+err:
+	free(pm_job->clients);
+	return new_sock;
 }
 
-/*
- * Core uses this callback to synchronize job to force expected or unexpected.
- */
-void barrier()
+static inline int client_init(struct pm_job_info *pm_job)
 {
-	MPI_Barrier(MPI_COMM_WORLD);
+	return  connect(pm_job->sock, pm_job->oob_server_addr,
+			sizeof(*pm_job->oob_server_addr));
 }
 
-static int process_mgmt_init()
+static int pm_conn_setup(struct pm_job_info *pm_job)
 {
-	int ret, our_ret;
+	int sock,  ret;
+	int optval = 1;
 
-	ret = MPI_Init(NULL, NULL);
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock < 0)
+		return -1;
+
+	pm_job->sock = sock;
+
+	ret = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *) &optval,
+			 sizeof(optval));
 	if (ret) {
-		our_ret = ret;
-		goto err_mpi_init;
+		fprintf(stderr, "error setting socket options\n");
+		return ret;
 	}
 
-	ret = MPI_Comm_size(MPI_COMM_WORLD, &num_ranks);
-	if (ret) {
-		our_ret = EXIT_FAILURE;
-		goto err_mpi_comm;
+	ret = bind(sock, pm_job->oob_server_addr,
+		   sizeof(*pm_job->oob_server_addr));
+	if (ret == 0) {
+		ret = server_init(pm_job);
+	} else {
+		ret = client_init(pm_job);
+	}
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static void pm_finalize(struct pm_job_info *pm_job)
+{
+	int i;
+
+	if (!pm_job->clients) {
+		close(pm_job->sock);
+		return;
 	}
 
-	ret = MPI_Comm_rank(MPI_COMM_WORLD, &our_rank);
-	if (ret != MPI_SUCCESS) {
-		our_ret = EXIT_FAILURE;
-		goto err_mpi_comm;
+	for (i = 0; i < pm_job->ranks; i++) {
+		close(pm_job->clients[i]);
 	}
-	return FI_SUCCESS;
-
-err_mpi_comm:
-	ret = MPI_Finalize();
-	if (ret) {
-		our_ret = our_ret ? our_ret : ret;
-	}
-err_mpi_init:
-	return our_ret;
+	free(pm_job->clients);
 }
 
 int main(const int argc, char * const *argv)
 {
-	struct job job;
-	int ret;
-
-	ret = process_mgmt_init();
-	if (ret)
-		return ret;
-
-	job = (struct job) {
-		.address_exchange = address_exchange,
-		.barrier = barrier,
-		.ranks = num_ranks,
-		.rank = our_rank
+	struct sockaddr_in sock_addr;
+	extern char *optarg;
+	struct pm_job_info pm_job = {
+		.allgather = pm_allgather,
+		.barrier = pm_barrier,
+		.oob_server_addr = (struct sockaddr *) &sock_addr,
 	};
+	int c, ret;
 
-	ret = core(argc, argv, &job);
+	while ((c = getopt(argc, argv, "s:n:b:")) != -1) {
+		switch (c) {
+		case 's':
+			sock_addr.sin_family = AF_INET;
+			if (inet_pton(AF_INET, optarg,
+				      (void *) &sock_addr.sin_addr) != 1)
+				return -1;
+			break;
+		case 'n':
+			pm_job.ranks = atoi(optarg);
+			break;
+		case 'b':
+			sock_addr.sin_port = atoi(optarg);
+		}
+	}
+
+	ret = pm_conn_setup(&pm_job);
+	if (ret)
+		goto err;
+
+	ret = core(argc, argv, &pm_job);
 	if (ret) {
 		fprintf(stderr, "TEST FAILED\n");
-		return EXIT_FAILURE;
+		goto err;
 	}
 	fprintf(stderr, "TEST PASSED\n");
+err:
+	pm_finalize(&pm_job);
 	return FI_SUCCESS;
 }
