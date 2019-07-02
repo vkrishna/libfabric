@@ -45,9 +45,9 @@
 #include <rdma/fi_cm.h>
 #include <rdma/fi_trigger.h>
 
-#include <core/user.h>
-#include <pattern/user.h>
-#include <test/user.h>
+#include <core.h>
+#include <pattern.h>
+#include <test.h>
 
 /* size of buffer to store fi_getname() result */
 #define NAMELEN 256

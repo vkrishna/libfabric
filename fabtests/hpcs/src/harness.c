@@ -41,7 +41,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <core/user.h>
+#include <core.h>
 
 static inline ssize_t socket_send(int sock, void *buf, size_t len, int flags)
 {
@@ -91,10 +91,10 @@ static int pm_allgather(void *my_address, void *addrs, int size,
 	if (!pm_job->clients) {
 		ret = socket_send(pm_job->sock, my_address, size, 0);
 		if (ret < 0)
-		return errno == EPIPE ? -FI_ENOTCONN : -errno;
+			return errno == EPIPE ? -FI_ENOTCONN : -errno;
 
 		ret = socket_recv(pm_job->sock, pm_job->addrs,
-			   pm_job->ranks*size, 0);
+				  pm_job->ranks*size, 0);
 		if (ret <= 0)
 			return (ret)? -errno : -FI_ENOTCONN;
 
@@ -116,7 +116,7 @@ static int pm_allgather(void *my_address, void *addrs, int size,
 		ret = socket_send(pm_job->clients[i], pm_job->addrs,
 				  pm_job->ranks*size, 0);
 		if (ret < 0)
-		    return ret;
+			return ret;
 	}
 	return 0;
 }

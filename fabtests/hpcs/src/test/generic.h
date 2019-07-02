@@ -35,7 +35,7 @@
 #include <rdma/fi_errno.h>
 #include <rdma/fi_eq.h>
 
-#include <test/user.h>
+#include <test.h>
 
 struct test_arguments;
 

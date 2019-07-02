@@ -31,5 +31,3 @@
  */
 
 #pragma once
-
-#include <pattern/user.h>

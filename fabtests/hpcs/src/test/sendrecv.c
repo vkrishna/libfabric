@@ -43,7 +43,7 @@
 #include <rdma/fi_eq.h>
 #include <rdma/fi_tagged.h>
 
-#include <test/user.h>
+#include <test.h>
 
 
 #define DEFAULT_TRANSFER_SIZE 4

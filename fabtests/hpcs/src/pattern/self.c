@@ -30,8 +30,7 @@
  * SOFTWARE.
  */
 
-#include <pattern/user.h>
-#include "util.h"
+#include <pattern.h>
 
 #define PATTERN_API_VERSION_MAJOR 0
 #define PATTERN_API_VERSION_MINOR 0

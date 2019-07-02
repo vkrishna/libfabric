@@ -41,7 +41,7 @@
 #include <rdma/fi_errno.h>
 #include <rdma/fi_eq.h>
 
-#include <test/user.h>
+#include <test.h>
 
 struct test_arguments {
 };
@@ -253,4 +253,3 @@ int test_generic_rx_fini_buffer(const struct test_arguments *arguments,
 {
 	return 0;
 }
-

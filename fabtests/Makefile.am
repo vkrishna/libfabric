@@ -343,15 +343,15 @@ ubertest_fi_ubertest_SOURCES = \
 ubertest_fi_ubertest_LDADD = libfabtests.la
 
 libcore_la_SOURCES = \
-	hpcs/src/core/core.c \
-	hpcs/include/core/user.h
+	hpcs/src/core.c \
+	hpcs/include/core.h
 
 libcore_la_CFLAGS = \
 	$(AM_CFLAGS) \
 	-I$(srcdir)/hpcs/include
 
 libharness_la_SOURCES = \
-	hpcs/src/harness/harness.c
+	hpcs/src/harness.c
 
 libharness_la_CFLAGS = \
 	$(AM_CFLAGS) \
@@ -362,15 +362,14 @@ libpattern_la_SOURCES = \
 	hpcs/src/pattern/self.c \
 	hpcs/src/pattern/alltoone.c \
 	hpcs/src/pattern/ring.c \
-	hpcs/include/pattern/user.h \
-	hpcs/src/pattern/util.h
+	hpcs/include/pattern.h
 
 libpattern_la_CFLAGS = $(libcore_la_CFLAGS)
 
 hpcs_fi_multinode_SOURCES = \
 	hpcs/src/test/sendrecv.c \
 	hpcs/src/test/generic.c \
-	hpcs/include/test/user.h
+	hpcs/include/test.h
 
 hpcs_fi_multinode_LDADD = \
 	libfabtests.la \

@@ -44,7 +44,7 @@
 #include <rdma/fi_rma.h>
 #include <rdma/fi_atomic.h>
 
-#include <test/user.h>
+#include <test.h>
 
 enum dest_mode {
 	SHARED_DEST,	/* senders all write to same offset */
