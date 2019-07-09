@@ -42,6 +42,7 @@
 #include <arpa/inet.h>
 
 #include <core.h>
+struct pm_job_info pm_job;
 
 static inline ssize_t socket_send(int sock, void *buf, size_t len, int flags)
 {
@@ -77,24 +78,24 @@ static inline int socket_recv(int sock, void *buf, size_t len, int flags)
 	return len;
 }
 
-static int pm_allgather(void *my_address, void *addrs, int size,
-			struct pm_job_info *pm_job)
+static int pm_allgather(void *my_item, void *items, int item_size)
+
 {
 	int i, ret;
 	uint8_t *offset;
 
-	pm_job->addrs = calloc(pm_job->ranks, size);
-	if (!pm_job->addrs)
-		return -FI_ENOMEM;
+	/* pm_job->addrs = calloc(pm_job->ranks, item_size); */
+	/* if (!pm_job->addrs) */
+	/* 	return -FI_ENOMEM; */
 
 	/* client */
-	if (!pm_job->clients) {
-		ret = socket_send(pm_job->sock, my_address, size, 0);
+	if (!pm_job.clients) {
+		ret = socket_send(pm_job.sock, my_item, item_size, 0);
 		if (ret < 0)
 			return errno == EPIPE ? -FI_ENOTCONN : -errno;
 
-		ret = socket_recv(pm_job->sock, pm_job->addrs,
-				  pm_job->ranks*size, 0);
+		ret = socket_recv(pm_job.sock, items,
+				  pm_job.ranks*item_size, 0);
 		if (ret <= 0)
 			return (ret)? -errno : -FI_ENOTCONN;
 
@@ -102,71 +103,72 @@ static int pm_allgather(void *my_address, void *addrs, int size,
 	}
 
 	/* server */
-	memcpy(pm_job->addrs, my_address, size);
+	memcpy(items, my_item, item_size);
 
-	for (i = 0; i < pm_job->ranks-1; i++) {
-		offset = (uint8_t *)pm_job->addrs +
-			size * (i+1);
-		ret = socket_recv(pm_job->clients[i], (void *)offset, size, 0);
+	for (i = 0; i < pm_job.ranks-1; i++) {
+		offset = (uint8_t *)items + item_size * (i+1);
+
+		ret = socket_recv(pm_job.clients[i], (void *)offset,
+				  item_size, 0);
 		if (ret <= 0)
 			return ret;
 	}
 
-	for (i = 0; i < pm_job->ranks-1; i++) {
-		ret = socket_send(pm_job->clients[i], pm_job->addrs,
-				  pm_job->ranks*size, 0);
+	for (i = 0; i < pm_job.ranks-1; i++) {
+		ret = socket_send(pm_job.clients[i], items,
+				  pm_job.ranks*item_size, 0);
 		if (ret < 0)
 			return ret;
 	}
 	return 0;
 }
 
-static void pm_barrier(struct pm_job_info *pm_job)
+static void pm_barrier()
 {
 	char ch;
-	char chs[pm_job->ranks];
+	char chs[pm_job.ranks];
 
-	pm_job->allgather(&ch, chs, 1, pm_job);
+	pm_job->allgather(&ch, chs, 1);
 }
 
-static int server_init(struct pm_job_info *pm_job)
+static int server_init()
 {
 	int new_sock;
 	int ret, i = 0;
 
-	ret = listen(pm_job->sock, pm_job->ranks);
+	ret = listen(pm_job.sock, pm_job.ranks);
 	if (ret)
 		return ret;
 
-	pm_job->clients = calloc(pm_job->ranks, sizeof(int));
-	if (!pm_job->clients)
+	pm_job.clients = calloc(pm_job.ranks, sizeof(int));
+	if (!pm_job.clients)
 		return -FI_ENOMEM;
 
-	while (i < pm_job->ranks-1 &&
-	       (new_sock = accept(pm_job->sock, NULL, NULL))) {
+	while (i < pm_job.ranks-1 &&
+	       (new_sock = accept(pm_job.sock, NULL, NULL))) {
 		if (new_sock < 0) {
 			fprintf(stderr, "error during server init\n");
 			goto err;
 		}
-		pm_job->clients[i] = new_sock;
+		pm_job.clients[i] = new_sock;
 		i++;
 		fprintf(stderr,"connection established\n");
 	}
 
-	close(pm_job->sock);
+	close(pm_job.sock);
 	return 0;
 err:
-	free(pm_job->clients);
+	free(pm_job.clients);
 	return new_sock;
 }
 
-static inline int client_init(struct pm_job_info *pm_job)
+static inline int client_init()
 {
-	return  connect(pm_job->sock, pm_job->oob_server_addr,
-			sizeof(*pm_job->oob_server_addr));
+	return  connect(pm_job.sock, pm_job.oob_server_addr,
+			sizeof(*pm_job.oob_server_addr));
 }
 
-static int pm_conn_setup(struct pm_job_info *pm_job)
+static int pm_conn_setup()
 {
 	int sock,  ret;
 	int optval = 1;
@@ -175,7 +177,7 @@ static int pm_conn_setup(struct pm_job_info *pm_job)
 	if (sock < 0)
 		return -1;
 
-	pm_job->sock = sock;
+	pm_job.sock = sock;
 
 	ret = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *) &optval,
 			 sizeof(optval));
@@ -184,12 +186,12 @@ static int pm_conn_setup(struct pm_job_info *pm_job)
 		return ret;
 	}
 
-	ret = bind(sock, pm_job->oob_server_addr,
-		   sizeof(*pm_job->oob_server_addr));
+	ret = bind(sock, pm_job.oob_server_addr,
+		   sizeof(*pm_job.oob_server_addr));
 	if (ret == 0) {
-		ret = server_init(pm_job);
+		ret = server_init();
 	} else {
-		ret = client_init(pm_job);
+		ret = client_init();
 	}
 	if (ret)
 		return ret;
@@ -216,12 +218,13 @@ int main(const int argc, char * const *argv)
 {
 	struct sockaddr_in sock_addr;
 	extern char *optarg;
-	struct pm_job_info pm_job = {
+	int c, ret;
+
+	pm_job = {
 		.allgather = pm_allgather,
 		.barrier = pm_barrier,
 		.oob_server_addr = (struct sockaddr *) &sock_addr,
 	};
-	int c, ret;
 
 	while ((c = getopt(argc, argv, "s:n:b:")) != -1) {
 		switch (c) {
@@ -239,11 +242,11 @@ int main(const int argc, char * const *argv)
 		}
 	}
 
-	ret = pm_conn_setup(&pm_job);
+	ret = pm_conn_setup();
 	if (ret)
 		goto err;
 
-	ret = core(argc, argv, &pm_job);
+	ret = core(argc, argv);
 	if (ret) {
 		fprintf(stderr, "TEST FAILED\n");
 		goto err;
