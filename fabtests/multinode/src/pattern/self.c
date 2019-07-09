@@ -32,25 +32,6 @@
 
 #include <pattern.h>
 
-#define PATTERN_API_VERSION_MAJOR 0
-#define PATTERN_API_VERSION_MINOR 0
-
-struct pattern_arguments {};
-
-static int parse_arguments(
-		const int argc,
-		char * const *argv,
-		struct pattern_arguments **arguments)
-{
-	*arguments = NULL;
-	return 0;
-}
-
-static void free_arguments(struct pattern_arguments *arguments)
-{
-	return;
-}
-
 static int self_pattern_next(
 		const struct pattern_arguments *arguments,
 		int my_rank,
@@ -66,14 +47,8 @@ static int self_pattern_next(
 	return -ENODATA;
 }
 
-struct pattern_api
-self_pattern_api(void)
-{
-	struct pattern_api pattern_api = {
-		.parse_arguments = &parse_arguments,
-		.free_arguments = &free_arguments,
-		.next_sender = &self_pattern_next,
-		.next_receiver = &self_pattern_next
-	};
-	return pattern_api;
-}
+struct pattern_api self_ops = {
+	.name = "self";
+	.next_sender = &self_pattern_next;
+	.next_receiver = &self_pattern_next;
+};

@@ -45,16 +45,73 @@
  * -----------------------------------------------------------------------------
  */
 
+
 struct pm_job_info {
 	size_t		rank;
 	size_t		ranks;
 	int		sock;
 	int		*clients; //only valid for server
 	struct sockaddr *oob_server_addr;
+	struct sockaddr *my_oob_addr;
 	void		*addrs;
-	int (*allgather)(void *my_address, void *addrs,
-			 int size, struct pm_job_info *pm_job);
+	fi_rma_iov	*remote_iovs;
+	int (*allgather)(void *my_item, void *items,
+			 int size);
 	void (*barrier)();
+};
+
+
+struct op_context {
+	struct context_info	*ctxinfo;
+	enum op_state		state;
+	uint8_t			*buf;
+	uint64_t		core_context;
+	uint64_t		test_context;
+	struct fid_mr		*tx_mr;
+	struct fid_cntr		*tx_cntr;
+	struct fid_domain	*domain;
+	uint64_t		test_state; /* reserved for test internal accounting */
+};
+
+/* Core loop progress information and context state. */
+struct multinode_state {
+	size_t			iteration;
+	/* allocated and pre-initialized memory resources */
+	uint8_t			*rx_buf;
+	uint8_t			*tx_buf;
+	struct op_context	*tx_context;
+	struct op_context	*rx_context;
+	uint64_t		*keys;
+	struct fid_mr		*rx_mr;
+
+	/* initiated and completed operation counters, not reset per iteration */
+	size_t			recvs_posted;
+	size_t			sends_posted;
+	size_t			recvs_done;
+	size_t			sends_done;
+
+	/* sends/recvs completed at beginning of current iteration */
+	size_t			sends_done_prev;
+	size_t			recvs_done_prev;
+
+	/* window slots */
+	size_t			tx_window;
+	size_t			rx_window;
+
+	/* pattern iterator state */
+	int			cur_sender;
+	int			cur_receiver;
+	/* int			cur_sender_rx_threshold; */
+	/* int			cur_receiver_tx_threshold; */
+
+	/* current iteration is complete when all three are true */
+	bool			all_recvs_done;
+	bool			all_sends_done;
+	bool			all_completions_done;
+
+	/* options */
+	uint64_t		tx_flags;
+	uint64_t		rx_flags;
 };
 
 /*

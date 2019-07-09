@@ -40,6 +40,9 @@
 #include <rdma/fi_trigger.h>
 #include <sys/uio.h>
 
+
+extern struct test test_list;
+
 /*
  * -----------------------------------------------------------------------------
  * TEST API

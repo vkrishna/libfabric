@@ -32,31 +32,7 @@
 
 #include <pattern.h>
 
-#define PATTERN_API_VERSION_MAJOR 0
-#define PATTERN_API_VERSION_MINOR 0
-
-struct pattern_arguments {};
-
-static int parse_arguments(
-		const int argc,
-		char * const *argv,
-		struct pattern_arguments **arguments)
-{
-	*arguments = NULL;
-	return 0;
-}
-
-static void free_arguments(struct pattern_arguments *arguments)
-{
-	return;
-}
-
-static int pattern_next(
-		const struct pattern_arguments *arguments,
-		int my_rank,
-		int num_ranks,
-		int *cur,
-		int *threshold)
+static int pattern_next(int *cur, int *threshold)
 {
 	int next = *cur + 1;
 
@@ -68,13 +44,8 @@ static int pattern_next(
 }
 
 
-struct pattern_api a2a_pattern_api(void)
-{
-	struct pattern_api pattern_api = {
-		.parse_arguments = &parse_arguments,
-		.free_arguments = &free_arguments,
-		.next_sender = &pattern_next,
-		.next_receiver = &pattern_next
-	};
-	return pattern_api;
-}
+struct pattern_ops all2all_ops = {
+	.name = "alltoall";
+	.next_sender = pattern_next;
+	.next_receiver = pattern_next;
+};

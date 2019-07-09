@@ -199,19 +199,19 @@ static int pm_conn_setup()
 	return 0;
 }
 
-static void pm_finalize(struct pm_job_info *pm_job)
+static void pm_finalize()
 {
 	int i;
 
-	if (!pm_job->clients) {
-		close(pm_job->sock);
+	if (!pm_job.clients) {
+		close(pm_job.sock);
 		return;
 	}
 
-	for (i = 0; i < pm_job->ranks; i++) {
-		close(pm_job->clients[i]);
+	for (i = 0; i < pm_job.ranks; i++) {
+		close(pm_job.clients[i]);
 	}
-	free(pm_job->clients);
+	free(pm_job.clients);
 }
 
 int main(const int argc, char * const *argv)

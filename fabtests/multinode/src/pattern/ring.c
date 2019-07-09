@@ -57,95 +57,6 @@
 #include <pattern.h>
 #include <core.h>
 
-#define PATTERN_API_VERSION_MAJOR 0
-#define PATTERN_API_VERSION_MINOR 0
-
-/*
- * Leader is the node that sends first in a triggered ops case.  If leader
- * is -1, there is no leader.
- *
- * Rings is the number of concurrent rings (the leader of each subsequent ring
- * is the leader's rank plus one mod N).  If rings is -1, the number of rings
- * will equal the number of ranks.
- */
-struct pattern_arguments {
-	int leader;
-	int rings;
-	int verbose;
-};
-
-static int ring_parse_arguments(
-		const int argc,
-		char * const *argv,
-		struct pattern_arguments **arguments)
-{
-	int longopt_idx=0, op;
-	static struct option longopt[] = {
-		{"leader", required_argument, 0, 'l'},
-		{"rings", required_argument, 0, 'r'},
-		{"multi-ring", no_argument, 0, 'm'},
-		{"verbose", no_argument, 0, 'v'},
-		{"help", no_argument, 0, 'h'},
-		{0}
-	};
-
-	int have_rings=0, have_multi_ring=0;
-
-	struct pattern_arguments *args = calloc(sizeof(struct pattern_arguments), 1);
-	if (args == NULL)
-	return -FI_ENOMEM;
-
-	*args = (struct pattern_arguments) {.leader = 0, .rings = 1};
-
-	while ((op = getopt_long(argc, argv, "l:r:mh", longopt, &longopt_idx)) != -1) {
-		switch (op) {
-		case 'l':
-			if (sscanf(optarg, "%d", &args->leader) != 1) {
-				hpcs_error("unable to parse --leader argument\n");
-				return -EINVAL;
-			}
-			if (args->leader < 0)
-			hpcs_error("ring pattern has no leader; deadlock expected if triggered ops are working correctly\n");
-			break;
-		case 'r':
-			if (sscanf(optarg, "%u", &args->rings) != 1) {
-				hpcs_error("unable to parse --rings argument\n");
-				return -EINVAL;
-			}
-			have_rings = 1;
-			break;
-		case 'm':
-			args->rings = -1;
-			have_multi_ring = 1;
-			break;
-		case 'v':
-			args->verbose = 1;
-			break;
-		case 'h':
-		default:
-			fprintf(stderr, "<pattern arguments> :=\n"
-					"\t[-l | --leader=<rank>]\n"
-					"\t[-r | --rings=<rings> | -m | --multi-ring]\n"
-					"\t[-v | --verbose]\n"
-					"\t[-h | --help]\n");
-			return -EINVAL;
-		}
-	}
-
-	if (have_rings && have_multi_ring) {
-		hpcs_error("--rings and --multi-ring arguments are mutually exclusive\n");
-		return -EINVAL;
-	}
-
-	*arguments = args;
-	return 0;
-}
-
-static void ring_free_arguments(struct pattern_arguments *arguments)
-{
-	free(arguments);
-}
-
 /*
  * Note: this does not handle the case where rings > num_ranks.
  */
@@ -230,14 +141,8 @@ static int ring_pattern_next_receiver(
 }
 
 
-struct pattern_api ring_pattern_api(void)
-{
-	struct pattern_api pattern_api = {
-		.parse_arguments = &ring_parse_arguments,
-		.free_arguments = &ring_free_arguments,
-		.next_sender = &ring_pattern_next_sender,
-		.next_receiver = &ring_pattern_next_receiver,
-		.enable_triggered = 1
-	};
-	return pattern_api;
-}
+struct pattern_api ring_ops = {
+	.name = "ring";
+	.next_sender = &ring_pattern_next_sender,
+	.next_receiver = &ring_pattern_next_receiver,
+};

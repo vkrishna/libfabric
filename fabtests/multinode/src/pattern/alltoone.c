@@ -40,52 +40,6 @@
 #define PATTERN_API_VERSION_MAJOR 0
 #define PATTERN_API_VERSION_MINOR 0
 
-struct pattern_arguments {
-	uint64_t target_rank;
-};
-
-static int ato_parse_arguments(
-		const int argc,
-		char * const *argv,
-		struct pattern_arguments **arguments)
-{
-	int longopt_idx=0, op;
-	static struct option longopt[] = {
-		{"target-rank", required_argument, 0, 't'},
-		{"help", no_argument, 0, 'h'},
-		{0}
-	};
-
-	struct pattern_arguments *args = calloc(sizeof(*args), 1);
-	if (args == NULL)
-		return -FI_ENOMEM;
-
-	*args = (struct pattern_arguments) {.target_rank = 0};
-
-	while ((op = getopt_long(argc, argv, "t:h", longopt, &longopt_idx)) != -1) {
-		switch (op) {
-		case 't':
-			if (sscanf(optarg, "%zu", &args->target_rank) != 1)
-				return -FI_EINVAL;
-			break;
-		case 'h':
-		default:
-			fprintf(stderr, "<pattern arguments> :=\n"
-					"\t[-t | --target-rank=<rank>]\n"
-					"\t[-h | --help]\n");
-			return -FI_EINVAL;
-		}
-	}
-
-	*arguments = args;
-	return 0;
-}
-
-static void ato_free_arguments(struct pattern_arguments *arguments)
-{
-	return;
-}
-
 static int ato_pattern_next_sender(
 		const struct pattern_arguments *arguments,
 		int my_rank,
@@ -122,13 +76,8 @@ static int ato_pattern_next_receiver(
 }
 
 
-struct pattern_api alltoone_pattern_api(void)
-{
-	struct pattern_api pattern_api = {
-		.parse_arguments = &ato_parse_arguments,
-		.free_arguments = &ato_free_arguments,
-		.next_sender = &ato_pattern_next_sender,
-		.next_receiver = &ato_pattern_next_receiver
-	};
-	return pattern_api;
-}
+struct pattern_ops all2one_ops = {
+	.name = "alltoone";
+	.next_sender = ato_pattern_next_sender;
+	.next_receiver = ato_pattern_next_receiver
+};

@@ -36,92 +36,36 @@
 #include <stdbool.h>
 #include <errno.h>
 
-/*
- * -----------------------------------------------------------------------------
- * TRAFFIC PATTERN API
- * -----------------------------------------------------------------------------
- *
- * A pattern can be described as a connectivity matrix between TX and RX
- * endpoints, with TX endpoints as rows and RX endpoints as columns.  Example:
- *
- *                         receivers
- *
- *                        EP0 EP1 EP2
- *                    EP0  1   0   1
- *        senders     EP1  0   1   0
- *                    EP2  0   0   1
- *
- * The above pattern shows every endpoint sending to itself, with endpoint 0
- * additionaly sending to endpoint 2.
- */
-
 /* Initial value for iterator position. */
 #define PATTERN_NO_CURRENT (-1)
 
-struct pattern_arguments;
+struct ft_mn_pattern_args {
+	int		ring_leader;
+	int		ring_count;
+	uint64_t	all2one_target_rank;
+};
 
-/*
- * CALLER INTERFACE
- *
- * The caller receives the callbacks as function pointers in the struct
- * pattern_api.  The caller will call the pattern_api function, which must be
- * defined by the pattern as a global symbol.  A declaration of it is provided
- * here that the pattern must define.  The pattern may set either tx_major or
- * rx_major to NULL if it only has an implementation for one of them.
- */
+#define INIT_PATTERN_OPTS (struct ft_mn_pattern_args) 	\
+	{						\
+		.ring_leader = 0;			\
+		.ring_count = 1;			\
+		.all2one_target_rank = 0;		\
+	}
 
-struct pattern_api {
-	int(*parse_arguments)(
-		const int argc,
-		char * const *argv,
-		struct pattern_arguments **arguments);
-	void (*free_arguments)(
-		struct pattern_arguments *arguments);
-
-/*
- * TRAFFIC PATTERN GENERATION
- *
- * Patterns are generated using a pair of iterators.  One is used by the
- * sender logic to iterate across all receivers it will be sending something
- * to, and the other is used by the receiver logic to iterate across all the
- * senders that it expects something from.
- *
- * arguments: the parsed version of the arguments.
- *
- * my_rank: the rank of the local process.
- *
- * num_ranks: the number of ranks in the job.
- *
- * cur_[sender,receiver]: the pair from which to search for the next valid pair.
- *
- * threshold: triggered op threshold (we don't need to trigger receives, but
- *	patterns may nevertheless want to use the threshold as an internal
- *	counter).
- *
- * return value: 0 in the normal, non-error case, -ENODATA if iterator is done,
- *      some other negative error number if an error occurred.
- */
+struct pattern_ops {
+	char *name;
 	int (*next_sender)(
-		const struct pattern_arguments *arguments,
-		int my_rank,
-		int num_ranks,
 		int *cur_sender,
 		int *threshold);
 
 	int (*next_receiver) (
-		const struct pattern_arguments *arguments,
-		int my_rank,
-		int num_ranks,
 		int *cur_receiver,
 		int *threshold);
-
-	bool enable_triggered;
 };
 
-
-/* List of patterns defined in source files under pattern directory. */
-
-struct pattern_api a2a_pattern_api(void);
-struct pattern_api self_pattern_api(void);
-struct pattern_api alltoone_pattern_api(void);
-struct pattern_api ring_pattern_api(void);
+struct pattern_ops pattern_list[] = {
+	&all2all_ops,
+	&all2one_ops,
+	&ring_ops,
+	&self_ops,
+};
