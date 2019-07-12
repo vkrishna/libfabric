@@ -246,13 +246,13 @@ int main(const int argc, char * const *argv)
 	if (ret)
 		goto err;
 
-	ret = core(argc, argv);
+	ret = multinode_run_tests();
 	if (ret) {
 		fprintf(stderr, "TEST FAILED\n");
 		goto err;
 	}
 	fprintf(stderr, "TEST PASSED\n");
 err:
-	pm_finalize(&pm_job);
+	pm_finalize();
 	return FI_SUCCESS;
 }

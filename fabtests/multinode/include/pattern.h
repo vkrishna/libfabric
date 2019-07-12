@@ -54,13 +54,8 @@ struct ft_mn_pattern_args {
 
 struct pattern_ops {
 	char *name;
-	int (*next_sender)(
-		int *cur_sender,
-		int *threshold);
-
-	int (*next_receiver) (
-		int *cur_receiver,
-		int *threshold);
+	int (*next_sender)();
+	int (*next_receiver) ();
 };
 
 struct pattern_ops pattern_list[] = {

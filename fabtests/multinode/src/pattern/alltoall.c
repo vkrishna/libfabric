@@ -32,7 +32,7 @@
 
 #include <pattern.h>
 
-static int pattern_next(int *cur, int *threshold)
+static int pattern_next(int *cur)
 {
 	int next = *cur + 1;
 

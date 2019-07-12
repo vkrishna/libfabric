@@ -62,7 +62,7 @@ struct pm_job_info {
 
 
 struct op_context {
-	struct context_info	*ctxinfo;
+	/* struct context_info	*ctxinfo; */
 	enum op_state		state;
 	uint8_t			*buf;
 	uint64_t		core_context;
@@ -77,12 +77,12 @@ struct op_context {
 struct multinode_state {
 	size_t			iteration;
 	/* allocated and pre-initialized memory resources */
+	uint8_t			*buf;
 	uint8_t			*rx_buf;
 	uint8_t			*tx_buf;
 	struct op_context	*tx_context;
 	struct op_context	*rx_context;
 	uint64_t		*keys;
-	struct fid_mr		*rx_mr;
 
 	/* initiated and completed operation counters, not reset per iteration */
 	size_t			recvs_posted;

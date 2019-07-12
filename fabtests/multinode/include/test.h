@@ -130,17 +130,17 @@ struct context_info {
 	struct op_context	*op_context;
 };
 
-struct op_context {
-	struct context_info	*ctxinfo;
-	enum op_state		state;
-	uint8_t			*buf;
-	uint64_t		core_context;
-	uint64_t		test_context;
-	struct fid_mr		*tx_mr;
-	struct fid_cntr		*tx_cntr;
-	struct fid_domain	*domain;
-	uint64_t		test_state; /* reserved for test internal accounting */
-};
+/* struct op_context { */
+/* 	struct context_info	*ctxinfo; */
+/* 	enum op_state		state; */
+/* 	uint8_t			*buf; */
+/* 	uint64_t		core_context; */
+/* 	uint64_t		test_context; */
+/* 	struct fid_mr		*tx_mr; */
+/* 	struct fid_cntr		*tx_cntr; */
+/* 	struct fid_domain	*domain; */
+/* 	uint64_t		test_state; /\* reserved for test internal accounting *\/ */
+/* }; */
 
 /*
  * CALLER INTERFACE
@@ -450,4 +450,4 @@ int test_generic_tx_fini_buffer(const struct test_arguments *arguments,
 int test_generic_rx_fini_buffer(const struct test_arguments *arguments,
 				uint8_t *buffer);
 
-struct test_api test_api (void);
+extern struct test_api sendrecv_api;

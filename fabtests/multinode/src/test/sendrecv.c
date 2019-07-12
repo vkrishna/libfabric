@@ -48,65 +48,7 @@
 
 #define DEFAULT_TRANSFER_SIZE 4
 
-struct test_arguments {
-	size_t transfer_size;
-	bool use_workqueue;
-};
-
-static int parse_arguments(
-		const int argc,
-		char * const *argv,
-		struct test_arguments **arguments,
-		size_t *buffer_size)
-{
-	int longopt_idx=0, op;
-	static struct option longopt[] = {
-		{"size", required_argument, 0, 's'},
-		{"workqueue", no_argument, 0, 'w'},
-		{"help", no_argument, 0, 'h'},
-		{0}
-	};
-
-	struct test_arguments *args = calloc(sizeof(struct test_arguments), 1);
-	if (args == NULL)
-		return -ENOMEM;
-
-	*args = (struct test_arguments) {
-		.transfer_size = DEFAULT_TRANSFER_SIZE
-	};
-
-	while ((op = getopt_long(argc, argv, "s:wh", longopt, &longopt_idx)) != -1) {
-		switch (op) {
-		case 's':
-			if (sscanf(optarg, "%zu", &args->transfer_size) != 1)
-			return -EINVAL;
-			break;
-		case 'w':
-			args->use_workqueue = 1;
-			break;
-		case 'h':
-		default:
-			fprintf(stderr, "<test arguments> :=\n"
-					"\t[-s | --size=<size>]\n"
-					"\t[-w | --workqueue]\n"
-					"\t[-h | --help]\n");
-			return -EINVAL;
-		}
-	}
-
-	*buffer_size = args->transfer_size;
-	*arguments = args;
-
-	return 0;
-}
-
-void free_arguments (struct test_arguments *arguments)
-{
-	free (arguments);
-	return;
-}
-
-static struct test_config config(const struct test_arguments *arguments)
+static struct test_config config()
 {
 	struct test_config config = {
 		.minimum_caps = FI_TAGGED | FI_SEND | FI_RECV,
@@ -204,37 +146,29 @@ static int rx_transfer(const struct test_arguments *arguments,
 			&op_context->ctxinfo[0].fi_context);
 }
 
-struct test_api test_api(void)
-{
-	struct test_api api = {
-		.parse_arguments = &parse_arguments,
-		.free_arguments = &free_arguments,
+struct test_api sendrecv_api = {
+	.config = &config,
 
-		.config = &config,
+	.tx_init_buffer = &test_generic_tx_init_buffer,
+	.rx_init_buffer = &test_generic_rx_init_buffer,
+	.tx_create_mr = &test_generic_tx_create_mr,
+	.rx_create_mr = NULL,
 
-		.tx_init_buffer = &test_generic_tx_init_buffer,
-		.rx_init_buffer = &test_generic_rx_init_buffer,
-		.tx_create_mr = &test_generic_tx_create_mr,
-		.rx_create_mr = NULL,
+	.tx_window_usage = &test_generic_tx_window_usage,
+	.rx_window_usage = &test_generic_rx_window_usage,
 
-		.tx_window_usage = &test_generic_tx_window_usage,
-		.rx_window_usage = &test_generic_rx_window_usage,
+	.tx_transfer = &tx_transfer,
+	.rx_transfer = &rx_transfer,
+	.tx_cntr_completion = &test_generic_tx_cntr_completion,
+	.rx_cntr_completion = &test_generic_rx_cntr_completion,
+	.tx_cq_completion = &test_generic_tx_cq_completion,
+	.rx_cq_completion = &test_generic_rx_cq_completion,
 
-		.tx_transfer = &tx_transfer,
-		.rx_transfer = &rx_transfer,
-		.tx_cntr_completion = &test_generic_tx_cntr_completion,
-		.rx_cntr_completion = &test_generic_rx_cntr_completion,
-		.tx_cq_completion = &test_generic_tx_cq_completion,
-		.rx_cq_completion = &test_generic_rx_cq_completion,
+	.tx_datacheck = &test_generic_tx_datacheck,
+	.rx_datacheck = &test_generic_rx_datacheck,
 
-		.tx_datacheck = &test_generic_tx_datacheck,
-		.rx_datacheck = &test_generic_rx_datacheck,
-
-		.tx_fini_buffer = &test_generic_tx_fini_buffer,
-		.rx_fini_buffer = &test_generic_rx_fini_buffer,
-		.tx_destroy_mr = &test_generic_tx_destroy_mr,
-		.rx_destroy_mr = NULL
-	};
-
-	return api;
-}
+	.tx_fini_buffer = &test_generic_tx_fini_buffer,
+	.rx_fini_buffer = &test_generic_rx_fini_buffer,
+	.tx_destroy_mr = &test_generic_tx_destroy_mr,
+	.rx_destroy_mr = NULL
+};

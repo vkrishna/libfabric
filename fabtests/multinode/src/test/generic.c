@@ -43,29 +43,19 @@
 
 #include <test.h>
 
-struct test_arguments {
-};
-
-void test_generic_free_arguments(struct test_arguments *arguments)
-{
-	free (arguments);
-}
-
-void test_generic_tx_init_buffer(const struct test_arguments *arguments,
-		uint8_t *buffer, size_t len)
+void test_generic_tx_init_buffer(uint8_t *buffer, size_t len)
 {
 	memset(buffer, UINT8_MAX, len);
 }
 
-void test_generic_rx_init_buffer(const struct test_arguments *arguments,
-		uint8_t *buffer, size_t len)
+void test_generic_rx_init_buffer(uint8_t *buffer, size_t len)
 {
 	memset(buffer, 0, len);
 }
 
-static struct fid_mr *test_generic_create_mr(const struct test_arguments *arguments,
-		struct fid_domain *domain, const uint64_t key,
-		uint8_t *buffer, size_t len, uint64_t access, uint64_t flags)
+static struct fid_mr *test_generic_create_mr(struct fid_domain *domain, const uint64_t key,
+					     uint8_t *buffer, size_t len, uint64_t access,
+					     uint64_t flags)
 {
 	int ret;
 	struct fid_mr *mr;
@@ -81,46 +71,43 @@ err_mr_reg:
 	return NULL;
 }
 
-struct fid_mr *test_generic_tx_create_mr(const struct test_arguments *arguments,
-		struct fid_domain *domain, const uint64_t key,
-		uint8_t *buffer, size_t len, uint64_t access, uint64_t flags)
+struct fid_mr *test_generic_tx_create_mr(struct fid_domain *domain, const uint64_t key,
+					 uint8_t *buffer, size_t len, uint64_t access,
+					 uint64_t flags)
 {
 	return test_generic_create_mr(arguments, domain, key,
-			buffer, len, access, flags);
+				      buffer, len, access, flags);
 }
 
-struct fid_mr *test_generic_rx_create_mr(const struct test_arguments *arguments,
-		struct fid_domain *domain, const uint64_t key,
-		uint8_t *buffer, size_t len, uint64_t access, uint64_t flags)
+struct fid_mr *test_generic_rx_create_mr(struct fid_domain *domain, const uint64_t key,
+					 uint8_t *buffer, size_t len, uint64_t access,
+					 uint64_t flags)
 {
 	return test_generic_create_mr(arguments, domain, key,
-			buffer, len, access, flags);
+				      buffer, len, access, flags);
 }
 
-int test_generic_tx_destroy_mr(const struct test_arguments *arguments, struct fid_mr *mr)
+int test_generic_tx_destroy_mr(struct fid_mr *mr)
 {
 	return fi_close(&mr->fid);
 }
 
-int test_generic_rx_destroy_mr(const struct test_arguments *arguments, struct fid_mr *mr)
+int test_generic_rx_destroy_mr(struct fid_mr *mr)
 {
 	return fi_close(&mr->fid);
 }
 
-size_t test_generic_tx_window_usage(const struct test_arguments *arguments,
-		const size_t transfer_id, const size_t transfer_count)
+size_t test_generic_tx_window_usage(const size_t transfer_id, const size_t transfer_count)
 {
 	return 1;
 }
 
-size_t test_generic_rx_window_usage(const struct test_arguments *arguments,
-		const size_t transfer_id, const size_t transfer_count)
+size_t test_generic_rx_window_usage(const size_t transfer_id, const size_t transfer_count)
 {
 	return 1;
 }
 
-int test_generic_tx_transfer(const struct test_arguments *arguments,
-		const size_t transfer_id, const size_t transfer_count,
+int test_generic_tx_transfer(const size_t transfer_id, const size_t transfer_count,
 		const fi_addr_t rx_address, struct fid_ep *endpoint,
 		struct op_context *op_context, uint8_t *buffer,
 		void *desc, uint64_t key, int rank, uint64_t flags)
@@ -128,8 +115,7 @@ int test_generic_tx_transfer(const struct test_arguments *arguments,
 	return 0;
 }
 
-int test_generic_rx_transfer(const struct test_arguments *arguments,
-		const size_t transfer_id, const size_t transfer_count,
+int test_generic_rx_transfer(const size_t transfer_id, const size_t transfer_count,
 		const fi_addr_t tx_address, struct fid_ep *endpoint,
 		struct op_context *op_context, uint8_t *buffer,
 		void *desc, uint64_t flags)
@@ -137,21 +123,18 @@ int test_generic_rx_transfer(const struct test_arguments *arguments,
 	return 0;
 }
 
-static int generic_cntr_completion(const struct test_arguments *arguments,
-		const size_t completion_count, struct fid_cntr *cntr)
+static int generic_cntr_completion(const size_t completion_count, struct fid_cntr *cntr)
 {
 	return fi_cntr_wait(cntr, completion_count, -1);
 }
 
 
-int test_generic_tx_cntr_completion(const struct test_arguments *arguments,
-		const size_t completion_count, struct fid_cntr *cntr)
+int test_generic_tx_cntr_completion(const size_t completion_count, struct fid_cntr *cntr)
 {
 	return generic_cntr_completion(arguments, completion_count, cntr);
 }
 
-int test_generic_rx_cntr_completion(const struct test_arguments *arguments,
-		const size_t completion_count, struct fid_cntr *cntr)
+int test_generic_rx_cntr_completion(const size_t completion_count, struct fid_cntr *cntr)
 {
 	return generic_cntr_completion(arguments, completion_count, cntr);
 }
@@ -162,8 +145,7 @@ int test_generic_rx_cntr_completion(const struct test_arguments *arguments,
  * transfer should implement their own completion logic (possibly calling
  * this in a loop) or use counters.
  */
-static int test_generic_cq_completion(const struct test_arguments *args,
-		struct op_context **op_contextp, struct fid_cq *cq)
+static int test_generic_cq_completion(struct op_context **op_contextp, struct fid_cq *cq)
 {
 	ssize_t ret;
 	struct fi_cq_tagged_entry cq_entry;
@@ -202,20 +184,17 @@ static int test_generic_cq_completion(const struct test_arguments *args,
 	return ret;
 }
 
-int test_generic_tx_cq_completion(const struct test_arguments *args,
-		struct op_context **context, struct fid_cq *cq)
+int test_generic_tx_cq_completion(struct op_context **context, struct fid_cq *cq)
 {
 	return test_generic_cq_completion(args, context, cq);
 }
 
-int test_generic_rx_cq_completion(const struct test_arguments *args,
-		struct op_context **context, struct fid_cq *cq)
+int test_generic_rx_cq_completion(struct op_context **context, struct fid_cq *cq)
 {
 	return test_generic_cq_completion(args, context, cq);
 }
 
-static int test_generic_datacheck(const struct test_arguments *arguments,
-		const uint8_t *buffer, size_t len)
+static int test_generic_datacheck(const uint8_t *buffer, size_t len)
 {
 	size_t i;
 
@@ -230,26 +209,22 @@ static int test_generic_datacheck(const struct test_arguments *arguments,
 	return 0;
 }
 
-int test_generic_tx_datacheck(const struct test_arguments *arguments,
-		const uint8_t *buffer, size_t len)
+int test_generic_tx_datacheck(const uint8_t *buffer, size_t len)
 {
 	return test_generic_datacheck(arguments, buffer, len);
 }
 
-int test_generic_rx_datacheck(const struct test_arguments *args,
-		const uint8_t *buffer, size_t len, size_t rx_peers)
+int test_generic_rx_datacheck(const uint8_t *buffer, size_t len, size_t rx_peers)
 {
 	return test_generic_datacheck(args, buffer, len);
 }
 
-int test_generic_tx_fini_buffer(const struct test_arguments *arguments,
-		uint8_t *buffer)
+int test_generic_tx_fini_buffer(uint8_t *buffer)
 {
 	return 0;
 }
 
-int test_generic_rx_fini_buffer(const struct test_arguments *arguments,
-		uint8_t *buffer)
+int test_generic_rx_fini_buffer(uint8_t *buffer)
 {
 	return 0;
 }

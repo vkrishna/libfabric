@@ -52,14 +52,16 @@
 
 struct core_state state;
 struct pattern_api *pattern;
+struct test_api *test_api;
 
 static int multinode_init_fabric()
 {
 	struct fi_info *hints;
 	struct fi_info *info;
+	size_t len;
 
 	opts = INIT_OPTS;
-	opts.options |= FT_OPT_SIZE;
+	opts.options |= (FT_OPT_SIZE | FT_OPT_SKIP_MSG_ALLOC);
 
 	hints = fi_allocinfo();
 	if (!hints)
@@ -135,80 +137,6 @@ static int multinode_close_fabric()
 	return ft_exit_code(ret);
 }
 
-/*
- * Pre-test setup of memory regions used by one-sided operations.
- * This includes exchanging keys with peers.
- *
- * This creates a single target-side memory region, which peers read
- * or write at some offset.
- */
-static int core_setup_target_mr(struct domain_state *domain_state,
-		struct arguments *args, struct test_config *config,
-		struct pm_job_info *job, struct fid_mr **rx_mr,
-		uint8_t *rx_buf, uint64_t *keys)
-{
-	uint64_t my_key;
-	int i, ret;
-
-	if (args->test_api.rx_create_mr == NULL || !config->rx_use_mr)
-		return 0;
-
-	if (args->window_size < job->ranks) {
-		hpcs_error("for one-sided communication, window must be >= number of ranks\n");
-		return (-FI_EINVAL);
-	}
-
-	/* Key can be any arbitrary number. */
-	*rx_mr = args->test_api.rx_create_mr(args->test_arguments, domain_state->domain, 42+job->rank,
-			rx_buf, args->window_size*args->buffer_size, config->mr_rx_flags, 0);
-	if (*rx_mr == NULL) {
-		hpcs_error("failed to create target memory region\n");
-		return -1;
-	}
-
-	my_key = fi_mr_key(*rx_mr);
-	job->allgather(&my_key, keys, sizeof(uint64_t), job);
-
-	if (verbose) {
-		hpcs_verbose("mr key exchange complete: rank %ld my_key %ld len %ld keys: ",
-				job->rank, my_key, args->window_size*args->buffer_size);
-		for (i=0; i < job->ranks; i++)
-			printf("%ld ", keys[i]);
-		printf("\n");
-	}
-
-	if (config->rx_use_cntr) {
-		if (!domain_state->rx_cntr) {
-			hpcs_error("no rx counter to bind mr to\n");
-			return -FI_EINVAL;
-		}
-
-		ret = fi_mr_bind(*rx_mr, &domain_state->rx_cntr->fid, config->mr_rx_flags);
-		if (ret) {
-			hpcs_error("fi_mr_bind (rx_cntr) failed: %d\n", ret);
-
-			/*
-			 * Binding an MR with FI_REMOTE_READ isn't defined by the OFI spec,
- 			 * so we don't consider this a failure.
-			 */
-			if (config->mr_rx_flags & FI_REMOTE_READ) {
-					hpcs_error("FI_REMOTE_READ memory region bind flag unsupported by this provider, skipping test.\n");
-				return -FI_EOPNOTSUPP;
-			}
-
-			return -1;
-		}
-	}
-
-	ret = fi_mr_enable(*rx_mr);
-	if (ret)
-		hpcs_error("fi_mr_enable failed: %d\n", ret);
-
-	job->barrier(job);
-
-	return 0;
-}
-
 static int multinode_post_rx()
 {
 	int ret, prev;
@@ -219,7 +147,7 @@ static int multinode_post_rx()
 
 		prev = state.cur_sender;
 
-		ret = pattern.next_sender();
+		ret = pattern->next_sender(&state.cur_sender);
 		if (ret == -ENODATA) {
 			state.all_recvs_done = true;
 			break;
@@ -227,11 +155,6 @@ static int multinode_post_rx()
 			return ret;
 		}
 
-		/*
-		 * Doing window check after calling next_sender allows us to
-		 * mark receives as done if our window is zero but there are
-		 * no more senders.
-		 */
 		if (state.rx_window == 0) {
 			state.cur_sender = prev;
 			break;
@@ -350,6 +273,9 @@ static int multinode_wait_for_comp()
 {
 	int ret, i;
 	struct op_context* op_context;
+
+	if (opts.options & FT_OPT_TX_CQ) {
+	}
 
 	/* poll completions */
 	if (test_config->rx_use_cq) {
@@ -535,19 +461,30 @@ static int multinode_init_state()
 		.all_recvs_done = false,
 		.all_completions_done =	false,
 
-		.tx_flags = pattern->enable_triggered ? FI_TRIGGER : 0,
+		.tx_flags = 0,
 		.rx_flags = 0,
 	};
 
-	state.tx_buf = calloc(opts.window_size,
-			      test_config->tx_buffer_size);
-	if (state.tx_buf == NULL)
+	state.tx_context = calloc(opts.window_size, tx_size);
+	if (state.tx_context)
 		return -FI_ENOMEM;
 
-	state.rx_buf = calloc(opts.window_size,
-			      test_config->rx_buffer_size);
-	if (state.rx_buf == NULL)
+	state.rx_context = calloc(opts.window_size, rx_size);
+	if (state.rx_context)
 		return -FI_ENOMEM;
+
+	state.buf = calloc(opts.window_size, tx_size + rx_size);
+	if (state.buf == NULL)
+		return -FI_ENOMEM;
+
+	state.rx_buf = state.buf;
+	state.tx_buf = state.buf + opts.window_size * rx_size;
+
+	ret = fi_mr_reg(domain, state.buf, opts.window_size * (rx_size + tx_size),
+			ft_info_to_mr_access(fi), 0, FT_MR_KEY, 0, &mr, NULL);
+
+	mr_desc = ft_check_mr_local_flag(fi) ? fi_mr_desc(mr) : NULL;
+	key = fi_mr_key(mr);
 
 	state.keys = calloc(job->ranks, sizeof(uint64_t));
 	if (state.keys == NULL)
@@ -573,30 +510,104 @@ static int multinode_init_state()
 
 		for (j = 0; j < test_config->rx_context_count; j++)
 			rx_context[i].ctxinfo[j].op_context = &rx_context[i];
-
 	}
 }
 
 static int multinode_fini_state()
 {
 	/* free all the allocated memory */
+	if (state.tx_buf)
+		free(state.tx_buf);
+
+	if (state.rx_buf)
+		free(state.rx_buf);
+
+	if (state.keys)
+		free(state.keys);
+
+	for (i = 0; i < window; i++) {
+		if (tx_context[i].ctxinfo)
+			free(tx_context[i].ctxinfo);
+
+		if (rx_context[i].ctxinfo)
+			free(rx_context[i].ctxinfo);
+	}
 }
 
-static int multinode_run_test(struct pattern_ops pattern_ops)
+static int multinode_exchange_keys()
+{
+	uint64_t my_key;
+
+	uint64_t my_key;
+	int i, ret;
+
+	if (test_api->rx_create_mr == NULL ||
+	    ft_check_opts(FT_OPT_SKIP_REG_MR))
+		return 0;
+
+	if (opts.window_size < job->ranks) {
+		hpcs_error("for one-sided communication, window must be >= number of ranks\n");
+		return (-FI_EINVAL);
+	}
+
+	/* Key can be any arbitrary number. */
+	*rx_mr = test_api->rx_create_mr(job->rank, rx_buf, opts.window_size*opts.buffer_size,
+					config->mr_rx_flags, 0);
+	ret = fi_mr_reg(domain, rx_buf, opts.window_size*opts.buffer_size,
+			ft_info_to_mr_access(fi), 0, FT_MR_KEY, 0, &mr, NULL);
+	if (*mr == NULL) {
+		hpcs_error("failed to create target memory region\n");
+		return -1;
+	}
+
+	my_key = fi_mr_key(*mr);
+	job->allgather(&my_key, keys, sizeof(uint64_t), job);
+
+	if (verbose) {
+		hpcs_verbose("mr key exchange complete: rank %ld my_key %ld len %ld keys: ",
+				job->rank, my_key, args->window_size*args->buffer_size);
+		for (i=0; i < job->ranks; i++)
+			printf("%ld ", keys[i]);
+		printf("\n");
+	}
+
+	if (!ft_check_opts(FT_OPT_RX_CQ))  {
+		if (!rxcntr) {
+			hpcs_error("no rx counter to bind mr to\n");
+			return -FI_EINVAL;
+		}
+
+		ret = fi_mr_bind(*mr, rxcntr->fid, config->mr_rx_flags);
+		if (ret) {
+			hpcs_error("fi_mr_bind (rx_cntr) failed: %d\n", ret);
+
+			/*
+			 * Binding an MR with FI_REMOTE_READ isn't defined by the OFI spec,
+ 			 * so we don't consider this a failure.
+			 */
+			if (config->mr_rx_flags & FI_REMOTE_READ) {
+					hpcs_error("FI_REMOTE_READ memory region bind flag unsupported by this provider, skipping test.\n");
+				return -FI_EOPNOTSUPP;
+			}
+
+			return -1;
+		}
+	}
+
+	ret = fi_mr_enable(*mr);
+	if (ret)
+		hpcs_error("fi_mr_enable failed: %d\n", ret);
+
+	job->barrier();
+	return FI_SUCCESS;
+}
+
+static int multinode_run_test()
 {
 	int ret;
 	size_t i, j;
-	size_t window = opts.window_size;
-	size_t iterations = opts.iterations;
 
-	ret = core_setup_target_mr(domain_state, arguments, test_config, job,
-			&state.rx_mr, state.rx_buf, state.keys);
-	if (ret == -FI_EOPNOTSUPP)
-		return 0;
-	else if (ret)
-		return ret;
-
-	for (state.iteration = 0; state.iteration < iterations; state.iteration++) {
+	for (state.iteration = 0; state.iteration < opts.iterations; state.iteration++) {
 		state.cur_sender = PATTERN_NO_CURRENT;
 		state.cur_receiver = PATTERN_NO_CURRENT;
 		state.cur_sender_rx_threshold = 0;
@@ -612,18 +623,15 @@ static int multinode_run_test(struct pattern_ops pattern_ops)
 		while (!state.all_completions_done ||
 				!state.all_recvs_done ||
 				!state.all_sends_done) {
-			ret = multinode_post_rx(domain_state, arguments, pattern,
-					test, test_config, job, &state);
+			ret = multinode_post_rx();
 			if (ret)
 				return ret;
 
-			ret = multinode_post_tx(domain_state, arguments, pattern,
-					test, test_config, job, &state);
+			ret = multinode_post_tx();
 			if (ret)
 				return ret;
 
-			ret = multinode_wait_for_comp(domain_state, arguments, pattern,
-					test, test_config, job, &state);
+			ret = multinode_wait_for_comp();
 			if (ret)
 				return ret;
 		}
@@ -631,30 +639,7 @@ static int multinode_run_test(struct pattern_ops pattern_ops)
 
 	/* Make sure all our peers are done before shutting down. */
 	job->barrier();
-
-	/*
-	 * OFI docs are unclear about proper order of closing memory region
-	 * and counter that are bound to each other.
-	 */
-	if (state.rx_mr != NULL && test->rx_destroy_mr != NULL) {
-		ret = test->rx_destroy_mr(arguments->test_arguments, state.rx_mr);
-		if (ret) {
-			hpcs_error("unable to release rx memory region\n");
-			return -FI_EFAULT;
-		}
-	}
-
 	return 0;
-}
-
-static int multinode_exchange_keys()
-{
-	uint64_t my_key;
-
-	my_key = fi_mr_key(mr);
-	job->allgather(&my_key, keys, sizeof(uint64_t), job);
-
-	return -FI_ENOSYS;
 }
 
 int multinode_run_tests()
@@ -665,21 +650,23 @@ int multinode_run_tests()
 	if (ret)
 		return ret;
 
-	/* TODO allocate msg buffers */
-
-	ret = multinode_exchange_keys();
-	if (ret)
-		goto err;
 	/* TODO cycle through pattern list */
+	/* TODO run tests with each pattern */
+
+	test_api = &sendrecv_api;
+	pattern = &all2all_ops;
 
 	ret = multinode_init_state();
 	if (ret)
-		goto err;
+		goto err1;
 
-	/* run tests with each pattern */
-	ret = multinode_run_test(all2all_ops);
+	ret = multinode_exchange_keys();
 	if (ret)
-		goto err;
+		goto err2;
+
+	ret = multinode_run_test();
+	if (ret)
+		goto err2;
 
 	return FI_SUCCESS;
 err2:
