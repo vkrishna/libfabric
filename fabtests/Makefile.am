@@ -340,17 +340,11 @@ ubertest_fi_ubertest_SOURCES = \
 ubertest_fi_ubertest_LDADD = libfabtests.la
 
 multinode_fi_multinode_SOURCES = \
-	multinode/src/test/sendrecv.c \
-	multinode/src/test/generic.c \
 	multinode/src/harness.c \
 	multinode/src/pattern/alltoall.c \
-	multinode/src/pattern/self.c \
-	multinode/src/pattern/alltoone.c \
-	multinode/src/pattern/ring.c \
 	multinode/include/pattern.h \
 	multinode/src/core.c \
-	multinode/include/core.h \
-	multinode/include/test.h
+	multinode/include/core.h
 
 multinode_fi_multinode_LDADD = 	libfabtests.la
 

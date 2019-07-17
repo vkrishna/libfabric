@@ -36,6 +36,8 @@
 #include <stdbool.h>
 #include <errno.h>
 
+#include <rdma/fabric.h>
+
 /* Initial value for iterator position. */
 #define PATTERN_NO_CURRENT (-1)
 
@@ -54,13 +56,8 @@ struct ft_mn_pattern_args {
 
 struct pattern_ops {
 	char *name;
-	int (*next_sender)();
-	int (*next_receiver) ();
+	int (*next_sender)(int *cur);
+	int (*next_receiver) (int *cur);
 };
 
-struct pattern_ops pattern_list[] = {
-	&all2all_ops,
-	&all2one_ops,
-	&ring_ops,
-	&self_ops,
-};
+extern struct pattern_ops all2all_ops;

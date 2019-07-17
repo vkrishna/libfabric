@@ -84,10 +84,6 @@ static int pm_allgather(void *my_item, void *items, int item_size)
 	int i, ret;
 	uint8_t *offset;
 
-	/* pm_job->addrs = calloc(pm_job->ranks, item_size); */
-	/* if (!pm_job->addrs) */
-	/* 	return -FI_ENOMEM; */
-
 	/* client */
 	if (!pm_job.clients) {
 		ret = socket_send(pm_job.sock, my_item, item_size, 0);
@@ -128,7 +124,7 @@ static void pm_barrier()
 	char ch;
 	char chs[pm_job.ranks];
 
-	pm_job->allgather(&ch, chs, 1);
+	pm_job.allgather(&ch, chs, 1);
 }
 
 static int server_init()
@@ -147,12 +143,12 @@ static int server_init()
 	while (i < pm_job.ranks-1 &&
 	       (new_sock = accept(pm_job.sock, NULL, NULL))) {
 		if (new_sock < 0) {
-			fprintf(stderr, "error during server init\n");
+			FT_ERR("error during server init\n");
 			goto err;
 		}
 		pm_job.clients[i] = new_sock;
 		i++;
-		fprintf(stderr,"connection established\n");
+		FT_DEBUG("connection established\n");
 	}
 
 	close(pm_job.sock);
@@ -182,7 +178,7 @@ static int pm_conn_setup()
 	ret = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *) &optval,
 			 sizeof(optval));
 	if (ret) {
-		fprintf(stderr, "error setting socket options\n");
+		FT_ERR("error setting socket options\n");
 		return ret;
 	}
 
@@ -191,10 +187,16 @@ static int pm_conn_setup()
 	if (ret == 0) {
 		ret = server_init();
 	} else {
+		opts.dst_addr = opts.src_addr;
+		opts.dst_port = opts.src_port;
+		opts.src_addr = NULL;
+		opts.src_port = 0;
 		ret = client_init();
 	}
-	if (ret)
+	if (ret) {
+		FT_ERR("OOB conn failed %s\n", strerror(errno));
 		return ret;
+	}
 
 	return 0;
 }
@@ -214,44 +216,55 @@ static void pm_finalize()
 	free(pm_job.clients);
 }
 
-int main(const int argc, char * const *argv)
+int main(int argc, char **argv)
 {
 	struct sockaddr_in sock_addr;
 	extern char *optarg;
 	int c, ret;
 
-	pm_job = {
-		.allgather = pm_allgather,
-		.barrier = pm_barrier,
-		.oob_server_addr = (struct sockaddr *) &sock_addr,
-	};
+	opts = INIT_OPTS;
+	opts.options |= (FT_OPT_SIZE | FT_OPT_ALLOC_MULT_MR);
 
-	while ((c = getopt(argc, argv, "s:n:b:")) != -1) {
+	pm_job.allgather = pm_allgather;
+	pm_job.barrier = pm_barrier;
+	pm_job.oob_server_addr = (struct sockaddr *) &sock_addr;
+	pm_job.clients = NULL;
+
+	sock_addr.sin_port = 8228;
+
+	while ((c = getopt(argc, argv, "n:h" ADDR_OPTS INFO_OPTS)) != -1) {
 		switch (c) {
-		case 's':
-			sock_addr.sin_family = AF_INET;
-			if (inet_pton(AF_INET, optarg,
-				      (void *) &sock_addr.sin_addr) != 1)
-				return -1;
+		default:
+			ft_parse_addr_opts(c, optarg, &opts);
+			ft_parseinfo(c, optarg, hints, &opts);
 			break;
+		case '?':
 		case 'n':
 			pm_job.ranks = atoi(optarg);
 			break;
-		case 'b':
-			sock_addr.sin_port = atoi(optarg);
+		case 'h':
+			ft_usage(argv[0], "A simple multinode test");
+			return EXIT_FAILURE;
 		}
 	}
+
+	sock_addr.sin_family = AF_INET;
+	if (inet_pton(AF_INET, opts.src_addr,
+		      (void *) &sock_addr.sin_addr) != 1)
+		return -1;
 
 	ret = pm_conn_setup();
 	if (ret)
 		goto err;
 
-	ret = multinode_run_tests();
+	FT_DEBUG("OOB job setup done\n");
+
+	ret = multinode_run_tests(argc, argv);
 	if (ret) {
-		fprintf(stderr, "TEST FAILED\n");
+		FT_ERR( "Tests failed\n");
 		goto err;
 	}
-	fprintf(stderr, "TEST PASSED\n");
+	FT_DEBUG("Tests Passed\n");
 err:
 	pm_finalize();
 	return FI_SUCCESS;

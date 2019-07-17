@@ -47,21 +47,40 @@
 
 #include <core.h>
 #include <pattern.h>
-#include <test.h>
+#include <shared.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
+struct pattern_ops *pattern;
 
-struct core_state state;
-struct pattern_api *pattern;
-struct test_api *test_api;
+struct multinode_xfer_state state =
 
-static int multinode_init_fabric()
+	(struct multinode_xfer_state) {
+	.recvs_posted = 0,
+	.sends_posted = 0,
+	.recvs_done = 0,
+	.sends_done = 0,
+
+	.tx_window = 0,
+	.rx_window = 0,
+
+	.cur_sender = PATTERN_NO_CURRENT,
+	.cur_receiver = PATTERN_NO_CURRENT,
+
+	.all_sends_done = false,
+	.all_recvs_done = false,
+	.all_completions_done =	false,
+
+	.tx_flags = 0,
+	.rx_flags = 0,
+};
+
+static int multinode_init_fabric(int argc, char **argv)
 {
-	struct fi_info *hints;
-	struct fi_info *info;
+	void *my_name;
 	size_t len;
-
-	opts = INIT_OPTS;
-	opts.options |= (FT_OPT_SIZE | FT_OPT_SKIP_MSG_ALLOC);
+	int ret;
 
 	hints = fi_allocinfo();
 	if (!hints)
@@ -70,68 +89,80 @@ static int multinode_init_fabric()
 	hints->ep_attr->type = FI_EP_RDM;
 	hints->caps = FI_MSG;
 	hints->mode = FI_CONTEXT;
-	hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
+	hints->domain_attr->mr_mode = opts.mr_mode;
 
-	ft_init();
+	tx_seq = 0;
+	rx_seq = 0;
+	tx_cq_cntr = 0;
+	rx_cq_cntr = 0;
 
-	if (!hints->ep_attr->type)
-		hints->ep_attr->type = FI_EP_RDM;
-
-	ret = fi_getinfo(FT_FIVERSION, node, service, flags, hints, &fi);
-	if (ret) {
-		FT_PRINTERR("fi_getinfo", ret);
+	ret = ft_getinfo(hints, &fi);
+	if (ret)
 		return ret;
-	}
 
 	ret = ft_open_fabric_res();
 	if (ret)
 		return ret;
 
-
-	opts.av_size = job->ranks;
+	opts.av_size = pm_job.ranks;
 	ret = ft_alloc_active_res(fi);
 	if (ret)
 		return ret;
 
+	len = FT_MAX_CTRL_MSG;
+	my_name = calloc(len, 1);
+	if (!my_name) {
+		FT_ERR("allocating memory failed\n");
+		ret = -FI_ENOMEM;
+		goto err1;
+	}
 
-	ret = fi_getname(&domain_state->endpoint->fid, &our_name, &len);
+	ret = ft_enable_ep(ep, eq, av, txcq, rxcq, txcntr, rxcntr);
+	if (ret)
+		return ret;
 
+	ret = fi_getname(&ep->fid, (void *) my_name, &len);
 	if (ret) {
-		hpcs_error("error determining local endpoint name\n");
-		goto err;
+		FT_PRINTERR("error determining local endpoint name\n", ret);
+		goto err2;
 	}
 
-	names = malloc(len * job->ranks);
-	if (names == NULL) {
-		hpcs_error("error allocating memory for address exchange\n");
-		ret = -1;
-		goto err;
+	pm_job.names = malloc(len * pm_job.ranks);
+	pm_job.name_len = len;
+
+	if (pm_job.names == NULL) {
+		FT_ERR("error allocating memory for address exchange\n");
+		ret = -FI_ENOMEM;
+		goto err2;
 	}
 
-	ret = job->allgather(&our_name, names, len, job);
+	ret = pm_job.allgather(my_name, pm_job.names, pm_job.name_len);
 	if (ret) {
-		hpcs_error("error exchanging addresses\n");
-		goto err;
+		FT_PRINTERR("error exchanging addresses\n", ret);
+		goto err2;
 	}
 
-	ret = fi_av_insert(domain_state->av, names, job->ranks,
-			   domain_state->addresses, 0, NULL);
-	if (ret != job->ranks) {
-		hpcs_error("unable to insert all addresses into AV table\n");
+	pm_job.fi_addrs = calloc(pm_job.ranks, sizeof(*pm_job.fi_addrs));
+	ret = fi_av_insert(av, pm_job.names, pm_job.ranks,
+			   pm_job.fi_addrs, 0, NULL);
+	if (ret != pm_job.ranks) {
+		FT_ERR("unable to insert all addresses into AV table\n");
 		ret = -1;
-		goto err;
+		goto err2;
 	} else {
 		ret = 0;
 	}
 
-	ret = ft_enable_ep_recv();
-	if (ret)
-		return ret;
 
 	return 0;
+err2:
+	free(my_name);
+err1:
+	ft_free_res();
+	return ft_exit_code(ret);
 }
 
-static int multinode_close_fabric()
+static int multinode_close_fabric(int ret)
 {
 	ft_free_res();
 	return ft_exit_code(ret);
@@ -139,12 +170,10 @@ static int multinode_close_fabric()
 
 static int multinode_post_rx()
 {
-	int ret, prev;
-	struct op_context* op_context;
+	int ret, prev, offset;
 
 	/* post receives */
 	while (!state.all_recvs_done) {
-
 		prev = state.cur_sender;
 
 		ret = pattern->next_sender(&state.cur_sender);
@@ -160,465 +189,112 @@ static int multinode_post_rx()
 			break;
 		}
 
+		offset = state.recvs_posted % opts.window_size ;
 		/* find context and buff */
-		/* post rx buff with associated context */
+		if (rx_ctx_arr[offset].state != OP_DONE) {
+			state.cur_sender = prev;
+			break;
+		}
 
-		state->recvs_posted++;
-		state->rx_window--;
+		ret = ft_post_rx_buf(ep, opts.transfer_size,
+				     &rx_ctx_arr[offset],
+				     rx_ctx_arr[offset].buf,
+				     rx_ctx_arr[offset].desc, 0);
+		if (ret)
+			return ret;
+
+		rx_ctx_arr[offset].state = 20 + offset;
+		state.recvs_posted++;
+		state.rx_window--;
 	};
 	return 0;
 }
 
-/*
- * Initiate as many tx transfers as our window allows, within
- * a single iteration of test/pattern.
- *
- * Return 0 unless an error occurs.
- */
-
 static int multinode_post_tx()
 {
-	int ret, i, prev;
-	struct op_context* op_context;
+	int ret, prev, offset;
+	fi_addr_t dest;
 
-	struct fid_mr* mr;
-	void *mr_desc;
+	while (!state.all_sends_done) {
 
-	/* post send(s) */
-	while (!state->all_sends_done) {
-		if (order == CALLBACK_ORDER_EXPECTED && !state->all_recvs_done)
-			break;
+		prev = state.cur_receiver;
 
-		prev = state->cur_receiver;
-
-		ret = pattern->next_receiver()
+		ret = pattern->next_receiver(&state.cur_receiver);
 		if (ret == -ENODATA) {
-			state->all_sends_done = true;
+			state.all_sends_done = true;
 			break;
 		} else if (ret < 0) {
 			return ret;
 		}
 
-		if (state->tx_window == 0) {
-			state->cur_receiver = prev;
+		if (state.tx_window == 0) {
+			state.cur_receiver = prev;
 			break;
 		}
 
-		op_context = CONTEXT(state->tx_context, state->sends_posted);
-		if (op_context->state != OP_DONE) {
-			state->cur_receiver = prev;
-			state->cur_receiver_tx_threshold = prev_threshold;
+		offset = state.sends_posted % opts.window_size;
+
+		if (tx_ctx_arr[offset].state != OP_DONE) {
+			state.cur_receiver = prev;
 			break;
 		}
-
-		test->tx_init_buffer(arguments->test_arguments,
-				DATA_BUF(state->tx_buf, state->sends_posted),
-				test_config->tx_buffer_size);
-
-		if (test_config->tx_use_cntr) {
-			mr = test->tx_create_mr(arguments->test_arguments,
-					domain_state->domain, 0,
-					DATA_BUF(state->tx_buf, state->sends_posted),
-					arguments->buffer_size, FI_SEND, 0);
-			if (mr == NULL) {
-				ret = -1;
-				hpcs_error("unable to register tx memory region\n");
-				return ret;
-			}
-
-			mr_desc = fi_mr_desc(mr);
-		} else {
-			mr = NULL;
-			mr_desc = NULL;
-		}
-
-		op_context->buf = DATA_BUF(state->tx_buf, state->sends_posted);
-		op_context->tx_mr = mr;
-
-		ret = test->tx_transfer(arguments->test_arguments,
-				job->rank, 1,
-				domain_state->addresses[state->cur_receiver],
-				domain_state->endpoint, op_context,
-				op_context->buf, mr_desc, state->keys[state->cur_receiver],
-				job->rank, state->tx_flags);
-
-		if (ret == -FI_EAGAIN) {
-			state->cur_receiver = prev;
-			state->cur_receiver_tx_threshold = prev_threshold;
-			break;
-		}
-
-		hpcs_verbose("tx_transfer initiated from rank %ld "
-				"to rank %d: ctx %p key %ld trigger %d ret %d\n",
-				job->rank, state->cur_receiver, op_context,
-				state->keys[state->cur_receiver],
-				state->cur_receiver_tx_threshold, ret);
-
-		if (ret) {
-			hpcs_error("tx_transfer failed, ret=%d\n", ret);
+		tx_ctx_arr[offset].buf[0] = offset;
+		dest = pm_job.fi_addrs[state.cur_receiver];
+		ret = ft_post_tx_buf(ep, dest, opts.transfer_size,
+				     NO_CQ_DATA,
+				     &tx_ctx_arr[offset],
+				     tx_ctx_arr[offset].buf,
+				     tx_ctx_arr[offset].desc, 0);
+		if (ret)
 			return ret;
-		}
 
-		op_context->state = OP_PENDING;
-		op_context->core_context = state->sends_posted;
-
-		state->sends_posted++;
-		state->tx_window--;
-	};
-
+		tx_ctx_arr[offset].state = OP_PENDING;
+		state.sends_posted++;
+		state.tx_window--;
+	}
 	return 0;
 }
 
 static int multinode_wait_for_comp()
 {
 	int ret, i;
-	struct op_context* op_context;
 
-	if (opts.options & FT_OPT_TX_CQ) {
-	}
-
-	/* poll completions */
-	if (test_config->rx_use_cq) {
-		while ((ret = test->rx_cq_completion(arguments->test_arguments,
-				&op_context,
-				domain_state->rx_cq)) != -FI_EAGAIN) {
-			if (ret) {
-				hpcs_error("cq_completion (rx) failed, ret=%d\n", ret);
-				return -1;
-			}
-
-			if (test->rx_datacheck(arguments->test_arguments,
-					op_context->buf, test_config->rx_buffer_size, 0)) {
-				hpcs_error("rank %d: rx data check error at iteration %ld\n",
-						job->rank, state->iteration);
-				return -FI_EFAULT;
-			}
-
-			op_context->state = OP_DONE;
-			state->recvs_done++;
-			state->rx_window++;
-
-			hpcs_verbose("ctx %p receive %ld complete\n",
-				     op_context, op_context->core_context);
-		}
-	}
-
-	if (test_config->tx_use_cq) {
-		while ((ret = test->tx_cq_completion(arguments->test_arguments,
-				&op_context,
-				domain_state->tx_cq)) != -FI_EAGAIN) {
-			if (ret) {
-				hpcs_error("cq_completion (tx) failed, ret=%d\n", ret);
-				return -1;
-			}
-			hpcs_verbose("Received tx completion for ctx %lx\n",
-				     op_context);
-
-			if (test->tx_datacheck(arguments->test_arguments,
-					op_context->buf,
-					test_config->tx_buffer_size)) {
-				hpcs_error("rank %d: tx data check error at iteration %ld\n",
-						job->rank, state->iteration);
-				return -FI_EFAULT;
-			}
-
-			if (test_config->tx_use_cntr && test->tx_destroy_mr != NULL) {
-				ret = test->tx_destroy_mr(arguments->test_arguments,
-						op_context->tx_mr);
-				if (ret) {
-					hpcs_error("unable to release tx memory region\n");
-					return -1;
-				}
-			}
-
-			op_context->state = OP_DONE;
-			op_context->test_state = 0;
-			state->sends_done++;
-			state->tx_window++;
-
-			hpcs_verbose("ctx %p send %ld complete\n",
-				     op_context, op_context->core_context);
-		}
-	}
-
-	/*
-	 * Counters are generally used for RMA/atomics and completion is handled
-	 * as all-or-nothing rather than tracking individual completions.
-	 *
-	 * Triggered ops tests may use counters and CQs at the same time, in which
-	 * case we ignore the counter completions here.
-	 */
-	if (state->all_recvs_done && state->all_sends_done) {
-		if (test_config->tx_use_cntr &&
-				state->sends_done < state->sends_posted &&
-				!test_config->tx_use_cq) {
-			ret = test->tx_cntr_completion(arguments->test_arguments,
-					state->sends_posted*test_config->tx_context_count,
-					domain_state->tx_cntr);
-			if (ret) {
-				hpcs_error("cntr_completion (tx) failed, ret=%d\n",
-						ret);
-				return -1;
-			}
-
-			for (i = state->sends_done_prev; i < state->sends_posted; i++) {
-				op_context = CONTEXT(state->tx_context, i);
-
-				if (test_config->tx_use_cntr && test->tx_destroy_mr != NULL) {
-					ret = test->tx_destroy_mr(arguments->test_arguments,
-							op_context->tx_mr);
-					if (ret) {
-						hpcs_error("unable to release tx memory region\n");
-						return -1;
-					}
-				}
-				op_context->state = OP_DONE;
-				op_context->test_state = 0;
-
-				state->sends_done++;
-				state->tx_window++;
-			}
-
-			if (state->sends_done != state->sends_posted) {
-				hpcs_error("tx accounting internal error\n");
-				return -FI_EFAULT;
-			}
-
-			hpcs_verbose("tx counter completion done\n");
-		}
-
-		if (test_config->rx_use_cntr &&
-				state->recvs_done < state->recvs_posted &&
-				!test_config->rx_use_cq) {
-			ret = test->rx_cntr_completion(arguments->test_arguments,
-					state->recvs_posted*test_config->rx_context_count,
-					domain_state->rx_cntr);
-			if (ret) {
-				hpcs_error("cntr_completion (rx) failed, ret=%d\n", ret);
-				return -1;
-			}
-
-			for (i = state->recvs_done_prev; i < state->recvs_posted; i++) {
-				op_context = CONTEXT(state->rx_context, i);
-				op_context->state = OP_DONE;
-				op_context->test_state = 0;
-				state->recvs_done++;
-				state->rx_window++;
-			}
-
-			/*
-			 * note: counter tests use rx_buf directly,
-			 * rather than DATA_BUF(rx_buf, i)
-			 */
-
-			if (test->rx_datacheck(arguments->test_arguments, state->rx_buf,
-					test_config->rx_buffer_size,
-					state->recvs_posted - state->recvs_done_prev)) {
-				hpcs_error("rx data check error at iteration %ld\n", i);
-				return -FI_EFAULT;
-			}
-
-			if (state->recvs_done != state->recvs_posted) {
-				hpcs_error("rx accounting internal error\n");
-				return -FI_EFAULT;
-			}
-
-			hpcs_verbose("rx counter completion done\n");
-		}
-	}
-
-	if (state->recvs_posted == state->recvs_done &&
-			state->sends_posted == state->sends_done) {
-		state->all_completions_done = true;
-	} else {
-		hpcs_verbose("rank %d: recvs posted/done = %ld/%ld, sends posted/done = %ld/%ld\n",
-				job->rank, state->recvs_posted, state->recvs_done,
-				state->sends_posted, state->sends_done);
-		/* rate-limit print statements */
-		if (verbose)
-			usleep(50000);
-	}
-
-	return 0;
-}
-
-static int multinode_init_state()
-{
-	int i;
-	struct op_context tx_context [window];
-	struct op_context rx_context [window];
-
-	state = (struct core_state) {
-		.tx_context = tx_context,
-		.rx_context = rx_context,
-		.tx_window_size = opts.window_size,
-		.rx_window_size = opts.window_size,
-
-		.cur_sender = PATTERN_NO_CURRENT,
-		.cur_receiver = PATTERN_NO_CURRENT,
-
-		.all_sends_done = false,
-		.all_recvs_done = false,
-		.all_completions_done =	false,
-
-		.tx_flags = 0,
-		.rx_flags = 0,
-	};
-
-	state.tx_context = calloc(opts.window_size, tx_size);
-	if (state.tx_context)
-		return -FI_ENOMEM;
-
-	state.rx_context = calloc(opts.window_size, rx_size);
-	if (state.rx_context)
-		return -FI_ENOMEM;
-
-	state.buf = calloc(opts.window_size, tx_size + rx_size);
-	if (state.buf == NULL)
-		return -FI_ENOMEM;
-
-	state.rx_buf = state.buf;
-	state.tx_buf = state.buf + opts.window_size * rx_size;
-
-	ret = fi_mr_reg(domain, state.buf, opts.window_size * (rx_size + tx_size),
-			ft_info_to_mr_access(fi), 0, FT_MR_KEY, 0, &mr, NULL);
-
-	mr_desc = ft_check_mr_local_flag(fi) ? fi_mr_desc(mr) : NULL;
-	key = fi_mr_key(mr);
-
-	state.keys = calloc(job->ranks, sizeof(uint64_t));
-	if (state.keys == NULL)
-		return -FI_ENOMEM;
-
-	memset((char*)&tx_context[0], 0, sizeof(tx_context[0])*window);
-	memset((char*)&rx_context[0], 0, sizeof(rx_context[0])*window);
-
-	for (i = 0; i < window; i++) {
-		tx_context[i].ctxinfo =
-				calloc(test_config->tx_context_count,
-						sizeof(struct context_info));
-		rx_context[i].ctxinfo =
-				calloc(test_config->rx_context_count,
-						sizeof(struct context_info));
-
-		if (tx_context[i].ctxinfo == NULL || rx_context[i].ctxinfo == NULL)
-			return -FI_ENOMEM;
-
-		/* Populate backlinks. */
-		for (j = 0; j < test_config->tx_context_count; j++)
-			tx_context[i].ctxinfo[j].op_context = &tx_context[i];
-
-		for (j = 0; j < test_config->rx_context_count; j++)
-			rx_context[i].ctxinfo[j].op_context = &rx_context[i];
-	}
-}
-
-static int multinode_fini_state()
-{
-	/* free all the allocated memory */
-	if (state.tx_buf)
-		free(state.tx_buf);
-
-	if (state.rx_buf)
-		free(state.rx_buf);
-
-	if (state.keys)
-		free(state.keys);
-
-	for (i = 0; i < window; i++) {
-		if (tx_context[i].ctxinfo)
-			free(tx_context[i].ctxinfo);
-
-		if (rx_context[i].ctxinfo)
-			free(rx_context[i].ctxinfo);
-	}
-}
-
-static int multinode_exchange_keys()
-{
-	uint64_t my_key;
-
-	uint64_t my_key;
-	int i, ret;
-
-	if (test_api->rx_create_mr == NULL ||
-	    ft_check_opts(FT_OPT_SKIP_REG_MR))
-		return 0;
-
-	if (opts.window_size < job->ranks) {
-		hpcs_error("for one-sided communication, window must be >= number of ranks\n");
-		return (-FI_EINVAL);
-	}
-
-	/* Key can be any arbitrary number. */
-	*rx_mr = test_api->rx_create_mr(job->rank, rx_buf, opts.window_size*opts.buffer_size,
-					config->mr_rx_flags, 0);
-	ret = fi_mr_reg(domain, rx_buf, opts.window_size*opts.buffer_size,
-			ft_info_to_mr_access(fi), 0, FT_MR_KEY, 0, &mr, NULL);
-	if (*mr == NULL) {
-		hpcs_error("failed to create target memory region\n");
-		return -1;
-	}
-
-	my_key = fi_mr_key(*mr);
-	job->allgather(&my_key, keys, sizeof(uint64_t), job);
-
-	if (verbose) {
-		hpcs_verbose("mr key exchange complete: rank %ld my_key %ld len %ld keys: ",
-				job->rank, my_key, args->window_size*args->buffer_size);
-		for (i=0; i < job->ranks; i++)
-			printf("%ld ", keys[i]);
-		printf("\n");
-	}
-
-	if (!ft_check_opts(FT_OPT_RX_CQ))  {
-		if (!rxcntr) {
-			hpcs_error("no rx counter to bind mr to\n");
-			return -FI_EINVAL;
-		}
-
-		ret = fi_mr_bind(*mr, rxcntr->fid, config->mr_rx_flags);
-		if (ret) {
-			hpcs_error("fi_mr_bind (rx_cntr) failed: %d\n", ret);
-
-			/*
-			 * Binding an MR with FI_REMOTE_READ isn't defined by the OFI spec,
- 			 * so we don't consider this a failure.
-			 */
-			if (config->mr_rx_flags & FI_REMOTE_READ) {
-					hpcs_error("FI_REMOTE_READ memory region bind flag unsupported by this provider, skipping test.\n");
-				return -FI_EOPNOTSUPP;
-			}
-
-			return -1;
-		}
-	}
-
-	ret = fi_mr_enable(*mr);
+	ret = ft_get_tx_comp(tx_seq);
 	if (ret)
-		hpcs_error("fi_mr_enable failed: %d\n", ret);
+		return ret;
 
-	job->barrier();
-	return FI_SUCCESS;
+	ret = ft_get_rx_comp(rx_seq);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < opts.window_size; i++) {
+		rx_ctx_arr[i].state = OP_DONE;
+		tx_ctx_arr[i].state = OP_DONE;
+	}
+
+	state.rx_window = opts.window_size;
+	state.tx_window = opts.window_size;
+
+	state.all_completions_done = true;
+	return 0;
 }
 
 static int multinode_run_test()
 {
 	int ret;
-	size_t i, j;
 
-	for (state.iteration = 0; state.iteration < opts.iterations; state.iteration++) {
+	for (state.iteration = 0;
+	     state.iteration < opts.iterations;
+	     state.iteration++) {
 		state.cur_sender = PATTERN_NO_CURRENT;
 		state.cur_receiver = PATTERN_NO_CURRENT;
-		state.cur_sender_rx_threshold = 0;
-		state.cur_receiver_tx_threshold = 0;
 
 		state.all_completions_done = false;
 		state.all_recvs_done = false;
 		state.all_sends_done = false;
 
-		state.recvs_done_prev = state.recvs_done;
-		state.sends_done_prev = state.sends_done;
+		state.rx_window = opts.window_size;
+		state.tx_window = opts.window_size;
 
 		while (!state.all_completions_done ||
 				!state.all_recvs_done ||
@@ -636,41 +312,22 @@ static int multinode_run_test()
 				return ret;
 		}
 	}
-
-	/* Make sure all our peers are done before shutting down. */
-	job->barrier();
+	pm_job.barrier();
 	return 0;
 }
 
-int multinode_run_tests()
+int multinode_run_tests(int argc, char **argv)
 {
-	int i, ret;
+	int ret = FI_SUCCESS;
 
-	ret = multinode_init_fabric();
+	ret = multinode_init_fabric(argc, argv);
 	if (ret)
 		return ret;
 
-	/* TODO cycle through pattern list */
-	/* TODO run tests with each pattern */
-
-	test_api = &sendrecv_api;
 	pattern = &all2all_ops;
 
-	ret = multinode_init_state();
-	if (ret)
-		goto err1;
-
-	ret = multinode_exchange_keys();
-	if (ret)
-		goto err2;
-
 	ret = multinode_run_test();
-	if (ret)
-		goto err2;
 
-	return FI_SUCCESS;
-err2:
-	multinode_fini_state();
-err1:
-	multinode_close_fabric();
+	multinode_close_fabric(ret);
+	return ret;
 }

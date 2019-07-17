@@ -47,34 +47,6 @@
 
 
 #define DEFAULT_TRANSFER_SIZE 4
-
-static struct test_config config()
-{
-	struct test_config config = {
-		.minimum_caps = FI_TAGGED | FI_SEND | FI_RECV,
-
-		.tx_use_cntr = true,
-		.rx_use_cntr = true,
-		.tx_use_cq = true,
-		.rx_use_cq = true,
-
-		.rx_use_mr = false,
-
-		.tx_buffer_size = arguments->transfer_size,
-		.rx_buffer_size = arguments->transfer_size,
-		.tx_buffer_alignment = 0,
-		.rx_buffer_alignment = 0,
-
-		.tx_data_object_sharing = DATA_OBJECT_PER_DOMAIN,
-		.rx_data_object_sharing = DATA_OBJECT_PER_TRANSFER,
-
-		.tx_context_count = 1,
-		.rx_context_count = 1,
-	};
-
-	return config;
-}
-
 static int tx_transfer(const struct test_arguments *arguments,
 		const size_t transfer_id,
 		const size_t transfer_count,
@@ -147,8 +119,6 @@ static int rx_transfer(const struct test_arguments *arguments,
 }
 
 struct test_api sendrecv_api = {
-	.config = &config,
-
 	.tx_init_buffer = &test_generic_tx_init_buffer,
 	.rx_init_buffer = &test_generic_rx_init_buffer,
 	.tx_create_mr = &test_generic_tx_create_mr,

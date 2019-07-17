@@ -70,65 +70,61 @@ enum data_object_sharing {
 	DATA_OBJECT_PER_DOMAIN
 };
 
-struct test_config {
-	uint64_t minimum_caps;
+/* struct test_config { */
+/* 	uint64_t minimum_caps; */
 
-	bool tx_use_cntr;
-	bool rx_use_cntr;
-	bool tx_use_cq;
-	bool rx_use_cq;
+/* 	bool tx_use_cntr; */
+/* 	bool rx_use_cntr; */
+/* 	bool tx_use_cq; */
+/* 	bool rx_use_cq; */
 
-	bool rx_use_mr;
+/* 	bool rx_use_mr; */
 
-	size_t tx_buffer_size;
-	size_t rx_buffer_size;
-	size_t tx_buffer_alignment;
-	size_t rx_buffer_alignment;
+/* 	size_t tx_buffer_size; */
+/* 	size_t rx_buffer_size; */
+/* 	size_t tx_buffer_alignment; */
+/* 	size_t rx_buffer_alignment; */
 
-	enum data_object_sharing tx_data_object_sharing;
-	enum data_object_sharing rx_data_object_sharing;
+/* 	enum data_object_sharing tx_data_object_sharing; */
+/* 	enum data_object_sharing rx_data_object_sharing; */
 
-	/*
-	 * Number of fi_contexts to allocate for per-transfer state.
-	 * Also affects number of counter events expected per transfer.
-	 */
-	size_t tx_context_count;
-	size_t rx_context_count;
+/* 	/\* */
+/* 	 * Number of fi_contexts to allocate for per-transfer state. */
+/* 	 * Also affects number of counter events expected per transfer. */
+/* 	 *\/ */
+/* 	size_t tx_context_count; */
+/* 	size_t rx_context_count; */
 
-	uint64_t mr_rx_flags;
-};
+/* 	uint64_t mr_rx_flags; */
+/* }; */
 
-enum op_state {
-	OP_DONE = 0,
-	OP_PENDING
-};
 
-struct context_info {
-	union {
-		struct fi_context2		fi_context;
-		struct fi_triggered_context2	fi_trig_context;
-	};
-	union {
-		struct fi_msg_tagged	tagged;
-		struct fi_msg_rma	rma_msg;
-		struct fi_msg_atomic	atomic_msg;
-	};
-	union {
-		struct iovec		iov;
-		struct fi_ioc		ioc;
-	};
-	union {
-		struct fi_rma_iov	rma_remote_iov;
-		struct fi_rma_ioc	rma_remote_ioc;
-	};
-	struct fi_deferred_work def_work;
-	union {
-		struct fi_op_rma	rma_op;
-		struct fi_op_atomic	atomic_op;
-		struct fi_op_tagged	tagged_op;
-	};
-	struct op_context	*op_context;
-};
+/* struct context_info { */
+/* 	union { */
+/* 		struct fi_context2		fi_context; */
+/* 		struct fi_triggered_context2	fi_trig_context; */
+/* 	}; */
+/* 	union { */
+/* 		struct fi_msg_tagged	tagged; */
+/* 		struct fi_msg_rma	rma_msg; */
+/* 		struct fi_msg_atomic	atomic_msg; */
+/* 	}; */
+/* 	union { */
+/* 		struct iovec		iov; */
+/* 		struct fi_ioc		ioc; */
+/* 	}; */
+/* 	union { */
+/* 		struct fi_rma_iov	rma_remote_iov; */
+/* 		struct fi_rma_ioc	rma_remote_ioc; */
+/* 	}; */
+/* 	struct fi_deferred_work def_work; */
+/* 	union { */
+/* 		struct fi_op_rma	rma_op; */
+/* 		struct fi_op_atomic	atomic_op; */
+/* 		struct fi_op_tagged	tagged_op; */
+/* 	}; */
+/* 	struct op_context	*op_context; */
+/* }; */
 
 /* struct op_context { */
 /* 	struct context_info	*ctxinfo; */

@@ -77,7 +77,7 @@ static int ato_pattern_next_receiver(
 
 
 struct pattern_ops all2one_ops = {
-	.name = "alltoone";
-	.next_sender = ato_pattern_next_sender;
-	.next_receiver = ato_pattern_next_receiver
+	.name = "alltoone",
+	.next_sender = ato_pattern_next_sender,
+	.next_receiver = ato_pattern_next_receiver,
 };

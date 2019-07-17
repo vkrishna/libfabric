@@ -168,40 +168,6 @@ void free_arguments(struct test_arguments *arguments)
 }
 
 
-static
-struct test_config config(const struct test_arguments *arguments)
-{
-	struct test_config config = {
-
-		.minimum_caps = FI_RMA | FI_ATOMIC | FI_RMA_EVENT,
-
-		.tx_use_cntr = true,
-		.rx_use_cntr = true,
-		.tx_use_cq = false,
-		.rx_use_cq = false,
-
-		.rx_use_mr = true,
-
-		.tx_buffer_size = arguments->transfer_size,
-		.rx_buffer_size = arguments->transfer_size,
-		.tx_buffer_alignment = 0,
-		.rx_buffer_alignment = 0,
-
-		.tx_data_object_sharing = DATA_OBJECT_PER_DOMAIN,
-		.rx_data_object_sharing = DATA_OBJECT_PER_TRANSFER,
-
-		.tx_context_count = arguments->repeat,
-		.rx_context_count = arguments->repeat,
-
-		.mr_rx_flags =
-				arguments->test_op == READ
-					? FI_REMOTE_READ
-					: FI_REMOTE_WRITE
-	};
-
-	return config;
-}
-
 
 static void tx_init_buffer(
 		const struct test_arguments *arguments,
@@ -470,8 +436,6 @@ struct test_api test_api(void)
 	struct test_api api = {
 		.parse_arguments = &parse_arguments,
 		.free_arguments = &free_arguments,
-
-		.config = &config,
 
 		.tx_init_buffer = &tx_init_buffer,
 		.rx_init_buffer = &rx_init_buffer,

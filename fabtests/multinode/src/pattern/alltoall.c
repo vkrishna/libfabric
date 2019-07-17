@@ -31,12 +31,13 @@
  */
 
 #include <pattern.h>
+#include <core.h>
 
 static int pattern_next(int *cur)
 {
 	int next = *cur + 1;
 
-	if (next >= num_ranks)
+	if (next >= pm_job.ranks)
 		return -ENODATA;
 
 	*cur = next;
@@ -45,7 +46,7 @@ static int pattern_next(int *cur)
 
 
 struct pattern_ops all2all_ops = {
-	.name = "alltoall";
-	.next_sender = pattern_next;
-	.next_receiver = pattern_next;
+	.name = "alltoall",
+	.next_sender = pattern_next,
+	.next_receiver = pattern_next,
 };

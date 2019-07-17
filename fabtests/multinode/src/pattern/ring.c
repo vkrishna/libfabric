@@ -89,7 +89,7 @@ static inline int ring_pattern_next(int is_sender,
 	max_threshold = is_leader ? rings - 1 : rings;
 
 	if (rings > num_ranks) {
-		hpcs_error("Ring pattern does not support a number of rings that exceeds number of ranks.\n");
+		FT_ERR("Ring pattern does not support a number of rings that exceeds number of ranks.\n");
 		return -EINVAL;
 	}
 
@@ -141,8 +141,8 @@ static int ring_pattern_next_receiver(
 }
 
 
-struct pattern_api ring_ops = {
-	.name = "ring";
+struct pattern_ops ring_ops = {
+	.name = "ring",
 	.next_sender = &ring_pattern_next_sender,
 	.next_receiver = &ring_pattern_next_receiver,
 };

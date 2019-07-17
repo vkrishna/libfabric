@@ -47,8 +47,8 @@ static int self_pattern_next(
 	return -ENODATA;
 }
 
-struct pattern_api self_ops = {
-	.name = "self";
-	.next_sender = &self_pattern_next;
-	.next_receiver = &self_pattern_next;
+struct pattern_ops self_ops = {
+	.name = "self",
+	.next_sender = self_pattern_next,
+	.next_receiver = self_pattern_next,
 };
