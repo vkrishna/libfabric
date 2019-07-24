@@ -34,8 +34,10 @@
 #include <math.h>
 
 #include <rdma/fabric.h>
+#include <rdma/fi_collective.h>
 #include "ofi.h"
 #include <ofi_util.h>
+#include <ofi_coll.h>
 
 #include "rxm.h"
 
@@ -359,7 +361,7 @@ static int rxm_ep_txrx_pool_create(struct rxm_ep *rxm_ep)
 		[RXM_BUF_POOL_TX_SAR] = rxm_ep->msg_info->tx_attr->size,
 		[RXM_BUF_POOL_RMA] = rxm_ep->msg_info->tx_attr->size,
 	};
-	size_t entry_sizes[] = {		
+	size_t entry_sizes[] = {
 		[RXM_BUF_POOL_RX] = rxm_eager_limit +
 				    sizeof(struct rxm_rx_buf),
 		[RXM_BUF_POOL_TX] = rxm_eager_limit +
@@ -468,6 +470,20 @@ static int rxm_getname(fid_t fid, void *addr, size_t *addrlen)
 	return fi_getname(&rxm_ep->msg_pep->fid, addr, addrlen);
 }
 
+static int rxm_join(struct fid_ep *ep, const void *addr, uint64_t flags,
+		    struct fid_mc **mc, void *context)
+{
+	struct fi_collective_addr *c_addr =
+		(struct fi_collective_addr *) addr;
+
+	if (flags & FI_COLLECTIVE)
+		return ofi_join_collective(ep, c_addr->join_addr,
+					   c_addr->set, flags, mc,
+					   context);
+	else
+		return -FI_ENOSYS;
+}
+
 static struct fi_ops_cm rxm_ops_cm = {
 	.size = sizeof(struct fi_ops_cm),
 	.setname = rxm_setname,
@@ -478,7 +494,7 @@ static struct fi_ops_cm rxm_ops_cm = {
 	.accept = fi_no_accept,
 	.reject = fi_no_reject,
 	.shutdown = fi_no_shutdown,
-	.join = fi_no_join,
+	.join = rxm_join,
 };
 
 static int rxm_ep_cancel_recv(struct rxm_ep *rxm_ep,

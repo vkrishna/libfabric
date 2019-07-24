@@ -52,34 +52,7 @@
 #include <rdma/fi_collective.h>
 #include <rdma/fi_cm.h>
 #include <ofi_list.h>
-
-struct util_av_set_entry {
-	fi_addr_t		fi_addr;
-	struct slist_entry 	entry;
-};
-
-struct util_av_set {
-	struct fid_av_set	av_set_fid;
-	struct util_av		*av;
-	struct slist		fi_addr_list;
-	size_t			fi_addr_count;
-	int 			my_fi_addr;
-	void			*context;
-	uint64_t		flags;
-	ofi_atomic32_t		ref;
-	fastlock_t		lock;
-};
-
-struct util_coll {
-	struct fid_mc	mc_fid;
-	struct util_av	*av;
-	struct slist	plist;
-};
-
-struct av_to_fi_addr_list {
-	fi_addr_t		*array;
-	size_t 			count;
-};
+#include <ofi_coll.h>
 
 int ofi_av_set_union(struct fid_av_set *dst, const struct fid_av_set *src)
 {
@@ -110,14 +83,6 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		       const struct fid_av_set *set,
 		       uint64_t flags, struct fid_mc **mc, void *context)
 {
-	size_t addrlen = ;
-	int ret;
-
-	ret = fi_getname(ep, (void *)addr, &addrlen);
-	if (ret)
-		return ret;
-
-
 	return -FI_ENOSYS;
 }
 
