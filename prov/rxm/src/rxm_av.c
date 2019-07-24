@@ -181,6 +181,11 @@ int rxm_av_lookup(struct fid_av *av_fid, fi_addr_t fi_addr,
 	return ofi_ip_av_lookup(av_fid, fi_addr, addr, addrlen);
 }
 
+static int rxm_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
+	       struct fid_av_set **av_set, void *context)
+{
+	return -FI_ENOSYS;
+}
 
 static struct fi_ops_av rxm_av_ops = {
 	.size = sizeof(struct fi_ops_av),
@@ -190,6 +195,7 @@ static struct fi_ops_av rxm_av_ops = {
 	.remove = rxm_av_remove,
 	.lookup = rxm_av_lookup,
 	.straddr = rxm_av_straddr,
+	.av_set = rxm_av_set,
 };
 
 int rxm_av_open(struct fid_domain *domain_fid, struct fi_av_attr *attr,
@@ -204,4 +210,3 @@ int rxm_av_open(struct fid_domain *domain_fid, struct fi_av_attr *attr,
 	(*av)->ops = &rxm_av_ops;
 	return 0;
 }
-

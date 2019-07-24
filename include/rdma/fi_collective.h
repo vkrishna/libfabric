@@ -68,7 +68,7 @@ struct fi_collective_attr {
 
 struct fi_collective_addr {
 	const struct fid_av_set	*set;
-	fi_addr_t		coll_addr;
+	fi_addr_t		join_addr;
 };
 
 struct fi_msg_collective {
