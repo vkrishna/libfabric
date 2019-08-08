@@ -54,6 +54,8 @@
 #include <ofi_list.h>
 #include <ofi_coll.h>
 
+uint64_t context_id;
+
 int ofi_av_set_union(struct fid_av_set *dst, const struct fid_av_set *src)
 {
 	return -FI_ENOSYS;
@@ -83,6 +85,20 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		       const struct fid_av_set *set,
 		       uint64_t flags, struct fid_mc **mc, void *context)
 {
+	int ret;
+
+	/* if (coll_addr == FI_ADDR_UNAVAIL) { */
+	/* 	set->av->av_set */
+	/* } else { */
+	/* 	ret = fi_allgather(ep, buf, count, desc, result, result_desc, */
+	/* 			   coll_addr, FI_UINT64, flags, context); */
+	/* } */
+	/* if coll_addr_is_valid */
+	/* 	call allreduce to get context id on all processes in av */
+	/* else */
+	/* 	call allreduce on all the fi_addrs corresponding to coll_addr */
+
+
 	return -FI_ENOSYS;
 }
 
@@ -150,4 +166,50 @@ err2:
 err1:
 	free(av_set);
 	return ret;
+}
+
+ssize_t util_coll_handle_comp(struct fid_ep *ep,
+			      struct fi_cq_data_entry *comp)
+{
+	return -FI_ENOSYS;
+}
+
+ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
+{
+	struct util_coll_mc *coll_mc = (struct util_coll_mc *) coll_addr;
+	fi_addr_t my_fi_addr;
+	fi_addr_t target_addr;
+	fi_addr_t source_addr;
+	struct fi_msg_tagged msg;
+
+	assert(ep == coll_mc->ep);
+	my_fi_addr = coll_mc->member_array[coll_mc->my_id];
+
+	source_addr = coll_mc->member_array[coll_mc->num_members - 1];
+	fi_trecv(ep, );
+	coll_mc->state = BARRIER_INIT;
+
+	if (!coll_mc->my_id) {
+		target_addr = coll_mc->member_array[(coll_mc->my_id + 1) %
+						    coll_mc->num_members];
+		fi_tsend();
+	}
+
+	return -FI_ENOSYS;
+}
+
+ssize_t	ofi_ep_writeread(struct fid_ep *ep, const void *buf, size_t count,
+		     void *desc, void *result, void *result_desc,
+		     fi_addr_t coll_addr, enum fi_datatype datatype,
+		     enum fi_op op, uint64_t flags, void *context)
+{
+	return -FI_ENOSYS;
+}
+
+
+ssize_t ofi_ep_writereadmsg(struct fid_ep *ep, const struct fi_msg_collective *msg,
+			struct fi_ioc *resultv, void **result_desc,
+			size_t result_count, uint64_t flags)
+{
+	return -FI_ENOSYS;
 }
