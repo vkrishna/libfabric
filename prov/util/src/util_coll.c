@@ -81,25 +81,104 @@ int ofi_av_set_remove(struct fid_av_set *set, fi_addr_t addr)
 	return -FI_ENOSYS;
 }
 
+static inline void util_coll_init_context_id()
+{
+	int i;
+
+	for (i = 0; i < OFI_CONTEXT_ID_SIZE; i++) {
+		util_coll_context_id[i] = -1;
+	}
+}
+
+static inline int util_coll_mc_alloc(struct util_coll_mc **coll_mc)
+{
+
+	*coll_mc = calloc(1, sizeof(**coll_mc));
+	if (!*coll_mc)
+		return -FI_ENOMEM;
+
+	slist_init((*coll_mc)->pend_work_list);
+	slist_init((*coll_mc)->work_list);
+	return FI_SUCCESS;
+}
+
+static inline int util_coll_pof2(int num)
+{
+	int pof2 = 1;
+
+	while (pof2 <= num)
+		pof2 <<= 1;
+
+	return (pof2 >> 1);
+}
+
 int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		       const struct fid_av_set *set,
 		       uint64_t flags, struct fid_mc **mc, void *context)
 {
-	int ret;
+	struct util_coll_mc *coll_mc;
+	struct util_av_set *av_set;
+	int ret, rem, pof2, my_new_id, mask = 1;
 
-	/* if (coll_addr == FI_ADDR_UNAVAIL) { */
-	/* 	set->av->av_set */
-	/* } else { */
-	/* 	ret = fi_allgather(ep, buf, count, desc, result, result_desc, */
-	/* 			   coll_addr, FI_UINT64, flags, context); */
-	/* } */
-	/* if coll_addr_is_valid */
-	/* 	call allreduce to get context id on all processes in av */
-	/* else */
-	/* 	call allreduce on all the fi_addrs corresponding to coll_addr */
+	av_set = container_of(set, struct util_av_set, av_set_fid);
 
+	ret = util_coll_mc_alloc(&coll_mc);
+	if (ret)
+		return ret;
 
-	return -FI_ENOSYS;
+	if (util_coll_cid_initialized == FALSE) {
+		util_coll_init_context_id();
+		util_coll_cid_initialized = TRUE;
+	}
+
+	coll_mc->mc_fid.fi_addr = coll_mc;
+	coll_mc->member_array = av_set->fi_addr_array;
+	coll_mc->num_members = av_set->fi_addr_count;
+	coll_mc->my_id = av_set->my_rank;
+
+	pof2 = util_coll_pof2(coll_mc->num_members);
+
+	rem = coll_mc->num_members - pof2;
+
+	if (coll_mc->my_id < 2 * rem) {
+		if (coll_mc->my_id % 2 == 0) {
+			util_coll_send_nb();
+			new_rank = -1;
+		} else {
+			util_coll_recv_nb();
+			new_rank /= 2;
+
+			util_coll_reduce_nb();
+		}
+	} else {
+		my_new_id = coll_mc->my_id;
+	}
+
+	if (new_rank != -1) {
+		while (mask < pof2) {
+			util_coll_recv_nb();
+			util_coll_send_nb();
+
+			if (is_commutative || (dst < rank)) {
+				util_coll_reduce_nb();
+			} else {
+				util_coll_reduce_nb();
+				util_coll_copy_nb();
+			}
+			mask <<= 1;
+		}
+	}
+
+	if (coll_mc->my_id < 2 * rem) {
+		if (coll_mc->my_id % 2) {
+			util_coll_send_nb();
+		} else {
+			util_coll_recv_nb();
+		}
+	}
+
+	*mc = &coll_mc->mc_fid;
+	return FI_SUCCESS;
 }
 
 
@@ -137,6 +216,9 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	ret = ofi_av_elements_iter(util_av, util_av_aggregator, (void *)&addr_list);
 	if (ret)
 		return ret;
+
+	/* if (!av_set->av->av_set) */
+	/* 	build_av_set(av); */
 
 	av_set = calloc(1,sizeof(*av_set));
 	if (!av_set)
