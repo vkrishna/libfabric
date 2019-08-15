@@ -616,6 +616,8 @@ ssize_t rxm_cq_handle_rx_buf(struct rxm_rx_buf *rx_buf)
 		return rxm_cq_handle_rndv(rx_buf);
 	case rxm_ctrl_seg:
 		return rxm_cq_handle_seg_data(rx_buf);
+	case rxm_ctrl_coll:
+		return util_coll_handle(rx_buf);
 	default:
 		FI_WARN(&rxm_prov, FI_LOG_CQ, "Unknown message type\n");
 		assert(0);
@@ -693,6 +695,11 @@ static inline ssize_t rxm_handle_recv_comp(struct rxm_rx_buf *rx_buf)
 		FI_DBG(&rxm_prov, FI_LOG_CQ, "Got TAGGED op\n");
 		match_attr.tag = rx_buf->pkt.hdr.tag;
 		return rxm_cq_match_rx_buf(rx_buf, &rx_buf->ep->trecv_queue,
+					   &match_attr);
+	case ofi_op_coll:
+		FI_DBG(&rxm_prov, FI_LOG_CQ, "Got collective TAGGED op\n");
+		match_attr.tag = rx_buf->pkt.hdr.tag;
+		return rxm_cq_match_rx_buf(rx_buf, &rx_buf->ep->coll_trecv_queue,
 					   &match_attr);
 	default:
 		FI_WARN(&rxm_prov, FI_LOG_CQ, "Unknown op!\n");
