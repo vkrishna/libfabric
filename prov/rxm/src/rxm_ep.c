@@ -433,7 +433,15 @@ static int rxm_ep_rx_queue_init(struct rxm_ep *rxm_ep)
 	if (ret)
 		goto err_recv_tag;
 
+	ret = rxm_recv_queue_init(rxm_ep, &rxm_ep->coll_trecv_queue,
+				  rxm_ep->rxm_info->rx_attr->size,
+				  RXM_RECV_QUEUE_TAGGED);
+	if (ret)
+		goto err_recv_coll;
+
 	return FI_SUCCESS;
+err_recv_coll:
+	rxm_recv_queue_close(&rxm_ep->trecv_queue);
 err_recv_tag:
 	rxm_recv_queue_close(&rxm_ep->recv_queue);
 	return ret;
@@ -441,6 +449,7 @@ err_recv_tag:
 
 static void rxm_ep_rx_queue_close(struct rxm_ep *rxm_ep)
 {
+	rxm_recv_queue_close(&rxm_ep->coll_trecv_queue);
 	rxm_recv_queue_close(&rxm_ep->trecv_queue);
 	rxm_recv_queue_close(&rxm_ep->recv_queue);
 }
@@ -539,6 +548,9 @@ static ssize_t rxm_ep_cancel(fid_t fid_ep, void *context)
 	if (ret)
 		return ret;
 
+	ret = rxm_ep_cancel_recv(rxm_ep, &rxm_ep->coll_trecv_queue, context);
+	if (ret)
+		return ret;
 	return 0;
 }
 
@@ -1701,7 +1713,8 @@ static ssize_t rxm_ep_trecvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged
 	return rxm_ep_recv_common_flags(rxm_ep, msg->msg_iov, msg->desc, msg->iov_count,
 					msg->addr, msg->tag, msg->ignore, msg->context,
 					flags | rxm_ep->util_ep.rx_msg_flags,
-					&rxm_ep->trecv_queue);
+					(flags & FI_COLLECTIVE)?
+					&rxm_ep->coll_trecv_queue : &rxm_ep->trecv_queue);
 }
 
 static ssize_t rxm_ep_trecv(struct fid_ep *ep_fid, void *buf, size_t len,

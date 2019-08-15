@@ -129,6 +129,7 @@ enum {
 	ofi_op_atomic_fetch,
 	ofi_op_atomic_compare,
 	ofi_op_read_async,
+	ofi_op_coll,
 	ofi_op_max,
 };
 
