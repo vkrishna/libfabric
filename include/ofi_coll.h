@@ -87,6 +87,10 @@ enum coll_work_type {
 	UTIL_COLL_COPY,
 };
 
+struct util_coll_item {
+	struct slist_entry	entry;
+	enum coll_work_type	type;
+}
 struct util_coll_xfer_item {
 	struct slist_entry	entry;
 	enum coll_work_type	type;

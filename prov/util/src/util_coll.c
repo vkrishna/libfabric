@@ -381,6 +381,52 @@ ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 	return -FI_ENOSYS;
 }
 
+static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
+{
+	struct util_coll_item *item;
+	struct slist_entry *entry;
+	int ret;
+
+	while (!dlist_empty(&coll_mc->work_list)) {
+		entry = slist_remove_head(coll_mc->pend_work_list);
+		item = container_of(entry, struct util_coll_mc, entry);
+		switch (item->type) {
+		case UTIL_COLL_SEND:
+			break;
+		case UTIL_COLL_RECV:
+			break;
+		case UTIL_COLL_REDUCE:
+			break;
+		case UTIL_COLL_COPY:
+			break;
+		default:
+			break;
+		}
+
+		if (item->is_barrier)
+			break;
+	}
+	return FI_SUCCESS;
+}
+
+static int util_coll_schedule_start(struct util_coll_mc *coll_mc)
+{
+	int ret;
+
+	if (dlist_empty(&coll_mc->pend_work_list)) {
+		ret = util_coll_process_work_items(coll_mc);
+		if (ret)
+			return ret;
+	}
+	return FI_SUCCESS;
+}
+
+void util_coll_handle_comp(comp)
+{
+	int ret;
+
+}
+
 ssize_t	ofi_ep_writeread(struct fid_ep *ep, const void *buf, size_t count,
 		     void *desc, void *result, void *result_desc,
 		     fi_addr_t coll_addr, enum fi_datatype datatype,
