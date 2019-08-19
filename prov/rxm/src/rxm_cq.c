@@ -607,6 +607,15 @@ ssize_t rxm_cq_handle_eager(struct rxm_rx_buf *rx_buf)
 	return rxm_finish_recv(rx_buf, done_len);
 }
 
+static inline
+ssize_t rxm_cq_handle_coll(struct rxm_rx_buf *rx_buf)
+{
+	util_coll_handle_comp();
+	rxm_recv_entry_release(rx_buf->recv_entry->recv_queue,
+			       rx_buf->recv_entry);
+	return FI_SUCCESS;
+}
+
 ssize_t rxm_cq_handle_rx_buf(struct rxm_rx_buf *rx_buf)
 {
 	switch (rx_buf->pkt.ctrl_hdr.type) {
@@ -617,7 +626,7 @@ ssize_t rxm_cq_handle_rx_buf(struct rxm_rx_buf *rx_buf)
 	case rxm_ctrl_seg:
 		return rxm_cq_handle_seg_data(rx_buf);
 	case rxm_ctrl_coll:
-		return util_coll_handle(rx_buf);
+		return rxm_cq_handle_coll(rx_buf);
 	default:
 		FI_WARN(&rxm_prov, FI_LOG_CQ, "Unknown message type\n");
 		assert(0);
