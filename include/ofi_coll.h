@@ -55,7 +55,7 @@ struct util_av_set {
 	fi_addr_t		*fi_addr_array;
 	size_t			fi_addr_count;
 	int 			my_fi_addr;
-	void			*context;
+	int 			my_rank;
 	uint64_t		flags;
 	ofi_atomic32_t		ref;
 	fastlock_t		lock;
