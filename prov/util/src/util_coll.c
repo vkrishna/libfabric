@@ -297,7 +297,6 @@ static int util_coll_close(struct fid *fid)
 
 	coll_mc = container_of(fid, struct util_coll_mc,
 			       mc_fid.fid);
-
 	free(coll_mc);
 }
 
@@ -410,9 +409,10 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 		av_set->fi_addr_count++;
 	}
 
+	av_set->av_set_fid.ops = &util_av_set_ops;
+	av_set->av_set_fid.fid.fclass = FI_CLASS_AV_SET;
+	av_set->av_set_fid.fid.context = context;
 	(*av_set_fid) = &av_set->av_set_fid;
-	(*av_set_fid)->ops = &util_av_set_ops;
-	av_set->context = context;
 	return FI_SUCCESS;
 err2:
 	fastlock_destroy(&av_set->lock);
