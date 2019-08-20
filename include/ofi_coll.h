@@ -61,18 +61,6 @@ struct util_av_set {
 	fastlock_t		lock;
 };
 
-struct util_mc {
-	struct fid_mc		mc_fid;
-	struct util_av_set 	*av_set;
-	ofi_atomic32_t		ref;
-};
-
-struct util_coll {
-	struct fid_mc		mc_fid;
-	struct util_av		*av;
-	struct slist		plist;
-};
-
 struct av_to_fi_addr_list {
 	fi_addr_t		*array;
 	size_t 			count;
