@@ -54,8 +54,6 @@
 #include <ofi_list.h>
 #include <ofi_coll.h>
 
-uint64_t context_id;
-
 int ofi_av_set_union(struct fid_av_set *dst, const struct fid_av_set *src)
 {
 	return -FI_ENOSYS;
@@ -81,12 +79,12 @@ int ofi_av_set_remove(struct fid_av_set *set, fi_addr_t addr)
 	return -FI_ENOSYS;
 }
 
-static inline void util_coll_init_context_id()
+static inline void util_coll_init_cid()
 {
 	int i;
 
 	for (i = 0; i < OFI_CONTEXT_ID_SIZE; i++) {
-		util_coll_context_id[i] = -1;
+		util_coll_cid[i] = -1;
 	}
 }
 
@@ -113,7 +111,7 @@ static inline int util_coll_pof2(int num)
 }
 
 static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest, void *buf,
-				int count, enum fi_datatype datatype)
+				int count, enum fi_datatype datatype, int is_barrier)
 {
 	struct util_coll_xfer_item *xfer_item;
 
@@ -121,17 +119,18 @@ static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest, void *bu
 	if (!xfer_item)
 		return -FI_ENOMEM;
 
-	xfer_item->type = UTIL_COLL_SEND;
+	xfer_item->hdr.type = UTIL_COLL_SEND;
+	xfer_item->hdr.is_barrier = is_barrier;
 	xfer_item->buf = buf;
 	xfer_item->count = count;
 	xfer_item->datatype = datatype;
 
-	slist_insert_tail(&xfer_item->entry, &coll_mc->work_list);
+	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
 	return FI_SUCCESS;
 }
 
 static int util_coll_sched_recv(struct util_coll_mc *coll_mc, int src, void *buf,
-				int count, enum fi_datatype datatype)
+				int count, enum fi_datatype datatype, int is_barrier)
 {
 	struct util_coll_xfer_item *xfer_item;
 
@@ -139,18 +138,20 @@ static int util_coll_sched_recv(struct util_coll_mc *coll_mc, int src, void *buf
 	if (!xfer_item)
 		return -FI_ENOMEM;
 
-	xfer_item->type = UTIL_COLL_RECV;
+	xfer_item->hdr.type = UTIL_COLL_RECV;
+	xfer_item->hdr.is_barrier = is_barrier;
 	xfer_item->buf = buf;
 	xfer_item->count = count;
 	xfer_item->datatype = datatype;
 
-	slist_insert_tail(&xfer_item->entry, &coll_mc->work_list);
+	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
 	return FI_SUCCESS;
 }
 
 static int util_coll_sched_reduce(struct util_coll_mc *coll_mc, void *in_buf,
 				  void *inout_buf, int count,
-				  enum fi_datatype datatype, enum fi_op op)
+				  enum fi_datatype datatype, enum fi_op op,
+				  int is_barrier)
 {
 	struct util_coll_reduce_item *xfer_item;
 
@@ -158,21 +159,22 @@ static int util_coll_sched_reduce(struct util_coll_mc *coll_mc, void *in_buf,
 	if (!xfer_item)
 		return -FI_ENOMEM;
 
-	xfer_item->type = UTIL_COLL_REDUCE;
+	xfer_item->hdr.type = UTIL_COLL_REDUCE;
+	xfer_item->hdr.is_barrier = is_barrier;
 	xfer_item->in_buf = in_buf;
 	xfer_item->inout_buf = inout_buf;
 	xfer_item->count = count;
 	xfer_item->datatype = datatype;
 	xfer_item->op = op;
 
-	slist_insert_tail(&xfer_item->entry, &coll_mc->work_list);
+	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
 	return FI_SUCCESS;
 }
 
 static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 				int in_count,enum fi_datatype in_datatype,
 				void *out_buf, int out_count,
-				enum fi_datatype out_datatype)
+				enum fi_datatype out_datatype, int is_barrier)
 {
 	struct util_coll_reduce_item *xfer_item;
 
@@ -180,7 +182,8 @@ static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 	if (!xfer_item)
 		return -FI_ENOMEM;
 
-	xfer_item->type = UTIL_COLL_COPY;
+	xfer_item->hdr.type = UTIL_COLL_COPY;
+	xfer_item->hdr.is_barrier = is_barrier;
 	xfer_item->in_buf = in_buf;
 	xfer_item->in_count = in_count;
 	xfer_item->in_datatype = in_datatype;
@@ -188,56 +191,44 @@ static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 	xfer_item->out_count = out_count;
 	xfer_item->out_datatype = out_datatype;
 
-	slist_insert_tail(&xfer_item->entry, &coll_mc->work_list);
-	return FI_SUCCESS;
-
-
+	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
 	return FI_SUCCESS;
 }
 
-int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
-		       const struct fid_av_set *set,
-		       uint64_t flags, struct fid_mc **mc, void *context)
+static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
+			void *recv_buf, int count, fi_datatype datatype,
+			fi_op op)
 {
-	struct util_coll_mc *coll_mc;
-	struct util_av_set *av_set;
-	uint64_t tmp_buf[OFI_CONTEXT_ID_SIZE];
-	int ret, rem, pof2, my_new_id;
+	int rem, pof2, my_new_id;
 	int dest, new_dest;
+	int ret;
 	int mask = 1;
-
-	av_set = container_of(set, struct util_av_set, av_set_fid);
-
-	ret = util_coll_mc_alloc(&coll_mc);
-	if (ret)
-		return ret;
-
-	if (util_coll_cid_initialized == FALSE) {
-		util_coll_init_context_id();
-		util_coll_cid_initialized = TRUE;
-	}
-
-	coll_mc->mc_fid.fi_addr = coll_mc;
-	coll_mc->member_array = av_set->fi_addr_array;
-	coll_mc->num_members = av_set->fi_addr_count;
-	coll_mc->my_id = av_set->my_rank;
 
 	pof2 = util_coll_pof2(coll_mc->num_members);
 	rem = coll_mc->num_members - pof2;
 
 	if (coll_mc->my_id < 2 * rem) {
 		if (coll_mc->my_id % 2 == 0) {
-			util_coll_sched_send(coll_mc, util_coll_context_id,
-					     coll_mc->my_id + 1,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64);
+			ret = util_coll_sched_send(coll_mc, send_buf,
+						   coll_mc->my_id + 1,
+						   count, datatype, 1);
+			if (ret)
+				return ret;
+
 			my_new_id = -1;
 		} else {
-			util_coll_sched_recv(coll_mc, tmp_buf, coll_mc->my_id - 1,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64);
+			ret = util_coll_sched_recv(coll_mc, recv_buf,
+						   coll_mc->my_id - 1,
+						   count, datatype, 1);
+			if (ret)
+				return ret;
+
 			my_new_id /= 2;
 
-			util_coll_sched_reduce(coll_mc, tmp_buf, util_coll_context_id,
-					       OFI_CONTEXT_ID_SIZE, FI_INT64, FI_BAND);
+			ret = util_coll_sched_reduce(coll_mc, recv_buf, send_buf,
+						     count, datatype, op, 1);
+			if (ret)
+				return ret;
 		}
 	} else {
 		my_new_id = coll_mc->my_id;
@@ -249,19 +240,32 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 			dest = (new_dest < rem) ? new_dest * 2 + 1 :
 				new_dest + rem;
 
-			util_coll_sched_recv(coll_mc, dest, tmp_buf,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64);
-			util_coll_sched_send(coll_mc, dest, util_coll_context_id,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64;)
+			ret = util_coll_sched_recv(coll_mc, dest, recv_buf,
+						   count, datatype, 0);
+			if (ret)
+				return ret;
+			ret = util_coll_sched_send(coll_mc, dest, send_buf,
+						   count, datatype, 1);
+			if (ret)
+				return ret;
+
 			if (is_commutative || (dest < coll_mc->my_id)) {
-				util_coll_sched_reduce(coll_mc, tmp_buf, util_coll_context_id,
-						       OFI_CONTEXT_ID_SIZE, FI_INT64, FI_BAND);
+				ret = util_coll_sched_reduce(coll_mc, recv_buf, send_buf,
+							     count, datatype, op, 1);
+				if (ret)
+					return ret;
+
 			} else {
-				util_coll_sched_reduce(coll_mc, util_coll_context_id, tmp_buf,
-						       OFI_CONTEXT_ID_SIZE, FI_INT64, FI_BAND);
-				util_coll_sched_copy(coll_mc, util_coll_context_id,
-						     OFI_CONTEXT_ID_SIZE, FI_INT64,
-						     tmp_buf, OFI_CONTEXT_ID_SIZE, FI_INT64);
+				ret = util_coll_sched_reduce(coll_mc, send_buf, recv_buf,
+							     count, datatype, op, 1);
+				if (ret)
+					return ret;
+
+				ret = util_coll_sched_copy(coll_mc, send_buf, count,
+							   datatype, recv_buf, count, op, 1);
+				if (ret)
+					return ret;
+
 			}
 			mask <<= 1;
 		}
@@ -269,16 +273,82 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 
 	if (coll_mc->my_id < 2 * rem) {
 		if (coll_mc->my_id % 2) {
-			util_coll_sched_send(coll_mc, util_coll_context_id,
-					     coll_mc->my_id - 1,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64);
+			ret = util_coll_sched_send(coll_mc, send_buf,
+						   coll_mc->my_id - 1,
+						   count, datatype, 0);
+			if (ret)
+				return ret;
+
 		} else {
-			util_coll_sched_recv(coll_mc, util_coll_context_id,
-					     coll_mc->my_id + 1,
-					     OFI_CONTEXT_ID_SIZE, FI_INT64);
+			ret = util_coll_sched_recv(coll_mc, send_buf,
+						   coll_mc->my_id + 1,
+						   count, datatype, 0);
+			if (ret)
+				return ret;
+
 		}
 	}
-	*mc = &coll_mc->mc_fid;
+	return FI_SUCCESS;
+}
+
+static int util_coll_close(struct fid *fid)
+{
+	struct util_coll_mc *coll_mc;
+
+	coll_mc = container_of(fid, struct util_coll_mc,
+			       mc_fid.fid);
+
+	free(coll_mc);
+}
+
+static struct fi_ops util_coll_fi_ops = {
+	.size = sizeof(struct fi_ops),
+	.close = util_coll_close,
+	.bind = fi_no_bind,
+	.control = fi_no_control,
+	.ops_open = fi_no_ops_open,
+};
+
+int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
+		       const struct fid_av_set *set,
+		       uint64_t flags, struct fid_mc **mc, void *context)
+{
+	struct util_coll_mc *new_coll_mc;
+	struct util_av_set *av_set;
+	struct util_coll_mc *coll_mc = (struct util_coll_mc *) coll_addr;
+	uint64_t tmp_buf[OFI_CONTEXT_ID_SIZE];
+	int ret, rem, pof2, my_new_id;
+	int dest, new_dest;
+	int mask = 1;
+
+	av_set = container_of(set, struct util_av_set, av_set_fid);
+
+	ret = util_coll_mc_alloc(&new_coll_mc);
+	if (ret)
+		return ret;
+
+	if (util_coll_cid_initialized == FALSE) {
+		util_coll_init_cid();
+		util_coll_cid_initialized = TRUE;
+	}
+
+	new_coll_mc->mc_fid.fi_addr = new_coll_mc;
+	new_coll_mc->member_array = av_set->fi_addr_array;
+	new_coll_mc->num_members = av_set->fi_addr_count;
+	new_coll_mc->my_id = av_set->my_rank;
+
+	new_coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
+	new_coll_mc->mc_fid.fid.context = context;
+	new_coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
+
+	ret = util_coll_allreduce(coll_mc, util_coll_cid, tmp_buf,
+				  OFI_CONTEXT_ID_SIZE, FI_INT64, FI_BAND);
+	if (ret) {
+		free(new_coll_mc);
+		return ret;
+	}
+
+	*mc = &new_coll_mc->mc_fid;
 	return FI_SUCCESS;
 }
 
