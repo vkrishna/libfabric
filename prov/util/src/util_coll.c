@@ -371,6 +371,32 @@ static int util_av_aggregator(struct util_av *av, void *addr,
 	return FI_SUCCESS;
 }
 
+static void util_coll_av_init(struct util_av *av)
+{
+
+	struct util_coll_mc *coll_mc;
+
+	assert(!av->coll_mc);
+
+	if (util_coll_cid_initialized == FALSE) {
+		util_coll_init_cid();
+		util_coll_cid_initialized = TRUE;
+	}
+
+	ret = util_coll_mc_alloc(&coll_mc);
+	if (ret)
+		return ret;
+
+	coll_mc->mc_fid.fi_addr = coll_mc;
+	coll_mc->member_array = av_set->fi_addr_array;
+	coll_mc->num_members = av_set->fi_addr_count;
+	coll_mc->my_id = av_set->my_rank;
+
+	coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
+	coll_mc->mc_fid.fid.context = context;
+	coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
+}
+
 int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	       struct fid_av_set **av_set_fid, void * context)
 {
@@ -387,8 +413,8 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	if (ret)
 		return ret;
 
-	/* if (!av_set->av->av_set) */
-	/* 	build_av_set(av); */
+	if (!util_av->coll_mc)
+		util_coll_av_init();
 
 	av_set = calloc(1,sizeof(*av_set));
 	if (!av_set)
