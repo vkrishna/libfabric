@@ -36,14 +36,12 @@
 #define OFI_WORLD_CONTEXT_ID 0
 #define OFI_CONTEXT_ID_SIZE 4
 
-uint64_t util_coll_context_id[OFI_CONTEXT_ID_SIZE];
+uint64_t util_coll_cid[OFI_CONTEXT_ID_SIZE];
 bool util_coll_cid_initialized = FALSE;
 
-enum barrier_state {
-	BARRIER_INIT,
-	BARRIER_WAIT_FOR_RECV,
-	BARRIER_WAIT_FOR_SEND,
-	BARRIER_DONE,
+enum barrier {
+	NO_BARRIER,
+	BARRIER,
 };
 
 struct util_av_set_entry {
@@ -87,21 +85,20 @@ enum coll_work_type {
 	UTIL_COLL_COPY,
 };
 
-struct util_coll_item {
+struct util_coll_hdr {
 	struct slist_entry	entry;
 	enum coll_work_type	type;
+	int 			is_barrier;
 }
 struct util_coll_xfer_item {
-	struct slist_entry	entry;
-	enum coll_work_type	type;
+	struct util_coll_hdr	hdr;
 	void 			*buf;
 	int			count;
 	enum fi_datatype	datatype;
 };
 
 struct util_coll_copy_item {
-	struct slist_entry	entry;
-	enum coll_work_type	type;
+	struct util_coll_hdr	hdr;
 	void 			*in_buf;
 	int			in_count;
 	enum fi_datatype	in_datatype;
@@ -112,8 +109,7 @@ struct util_coll_copy_item {
 };
 
 struct util_coll_reduce_item {
-	struct slist_entry	entry;
-	enum coll_work_type	type;
+	struct util_coll_hdr	hdr;
 	void 			*in_buf;
 	void 			*inout_buf;
 	int			count;
@@ -128,6 +124,7 @@ struct util_coll_mc {
 	struct slist		pend_work_list;
 	struct slist		work_list;
 	struct fi_addr_t	*member_array;
+	int			cid;
 	int 			num_members;
 	int 			my_id;
 	uint64_t		comm_id;

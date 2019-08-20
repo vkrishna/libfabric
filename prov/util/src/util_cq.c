@@ -693,4 +693,3 @@ uint64_t ofi_tx_flags[] = {
 	[ofi_op_atomic_compare] = FI_ATOMIC | FI_READ,
 	[ofi_op_read_async] = FI_RMA | FI_RMA,
 };
-
