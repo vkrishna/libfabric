@@ -44,26 +44,14 @@ enum barrier {
 	BARRIER,
 };
 
-struct util_av_set_entry {
-	fi_addr_t		fi_addr;
-	struct slist_entry 	entry;
-};
-
 struct util_av_set {
 	struct fid_av_set	av_set_fid;
 	struct util_av		*av;
 	fi_addr_t		*fi_addr_array;
 	size_t			fi_addr_count;
-	int 			my_fi_addr;
-	int 			my_rank;
 	uint64_t		flags;
 	ofi_atomic32_t		ref;
 	fastlock_t		lock;
-};
-
-struct av_to_fi_addr_list {
-	fi_addr_t		*array;
-	size_t 			count;
 };
 
 enum coll_work_type {
