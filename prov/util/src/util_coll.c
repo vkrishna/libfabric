@@ -308,6 +308,11 @@ static struct fi_ops util_coll_fi_ops = {
 	.ops_open = fi_no_ops_open,
 };
 
+static int util_coll_find_my_rank(struct util_coll_mc *coll_mc)
+{
+	return FI_SUCCESS;
+}
+
 int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		       const struct fid_av_set *set,
 		       uint64_t flags, struct fid_mc **mc, void *context)
@@ -316,6 +321,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	struct util_av_set *av_set;
 	struct util_coll_mc *coll_mc = (struct util_coll_mc *) coll_addr;
 	uint64_t tmp_buf[OFI_CONTEXT_ID_SIZE];
+	uint64_t *cid;
 	int ret, rem, pof2, my_new_id;
 	int dest, new_dest;
 	int mask = 1;
@@ -334,7 +340,12 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	new_coll_mc->mc_fid.fi_addr = new_coll_mc;
 	new_coll_mc->member_array = av_set->fi_addr_array;
 	new_coll_mc->num_members = av_set->fi_addr_count;
-	new_coll_mc->my_id = av_set->my_rank;
+
+	/* get the rank */
+	util_coll_find_my_rank(new_coll_mc);
+	util_coll_find_my_rank(coll_mc);
+
+	if (new_coll_mc->my_rank == -1)
 
 	new_coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
 	new_coll_mc->mc_fid.fid.context = context;
@@ -360,21 +371,24 @@ static struct fi_ops_av_set util_av_set_ops= {
 	.remove		=	ofi_av_set_remove,
 };
 
-static int util_av_aggregator(struct util_av *av, void *addr,
-			      fi_addr_t fi_addr, void *arg)
+void util_coll_av_close(struct util_av *av)
 {
-	struct av_to_fi_addr_list *addr_list;
-
-	addr_list = (struct av_to_fi_addr_list *) arg;
-	addr_list->array[addr_list->count] = fi_addr;
-	addr_list->count++;
-	return FI_SUCCESS;
+	struct util_coll_mc *coll_mc;
+	struct util_av_set *av_set;
 }
 
-static void util_coll_av_init(struct util_av *av)
+static int util_coll_copy_from_av(struct util_av *av, void *addr,
+			      fi_addr_t fi_addr, void *arg)
+{
+	struct util_av_set *av_set = (struct util_av_set *) arg;
+	av_set->fi_addr_array[av_set->fi_addr_count++] = fi_addr;
+}
+
+static int util_coll_av_init(struct util_av *av)
 {
 
 	struct util_coll_mc *coll_mc;
+	struct fi_addr *array;
 
 	assert(!av->coll_mc);
 
@@ -387,6 +401,33 @@ static void util_coll_av_init(struct util_av *av)
 	if (ret)
 		return ret;
 
+	coll_mc->av_set = calloc(1, av_set);
+	if (!coll_mc->av_set) {
+		free(coll_mc);
+		return -FI_ENOMEM;
+	}
+
+	coll_mc->av_set.av_set_fid.fid.fclass = FI_CLASS_AV_SET;
+
+	ret = fastlock_init(&coll_mc->av_set->lock);
+	if (ret)
+		goto err1;
+
+	array = calloc(av->count, sizeof(*array));
+	if (!array) {
+		ret = -FI_ENOMEM;
+		goto err2;
+	}
+
+	coll_mc->av_set->av = av;
+	ret = ofi_av_elements_iter(av, util_coll_copy_from_av,
+				   (void *)coll_mc->av_set);
+	if (ret)
+		return ret;
+
+	assert(coll_mc->av_set->fi_addr_count == av->count);
+	coll_mc->av_set->av_set_fid.ops = &util_av_set_ops;
+
 	coll_mc->mc_fid.fi_addr = coll_mc;
 	coll_mc->member_array = av_set->fi_addr_array;
 	coll_mc->num_members = av_set->fi_addr_count;
@@ -395,26 +436,26 @@ static void util_coll_av_init(struct util_av *av)
 	coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
 	coll_mc->mc_fid.fid.context = context;
 	coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
+	return FI_SUCCESS;
+err2:
+	fastlock_destroy(&coll_mc->av_set->lock);
+err1:
+	free(coll_mc->av_set);
+	free(coll_mc);
 }
 
 int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 	       struct fid_av_set **av_set_fid, void * context)
 {
 	struct util_av *util_av = container_of(av, struct util_av, av_fid);
-	struct av_to_fi_addr_list addr_list;
-	fi_addr_t mem[util_av->count];
 	struct util_av_set *av_set;
 	int ret, iter;
 
-	addr_list.array = mem;
-	addr_list.count = 0;
-
-	ret = ofi_av_elements_iter(util_av, util_av_aggregator, (void *)&addr_list);
-	if (ret)
-		return ret;
-
-	if (!util_av->coll_mc)
-		util_coll_av_init();
+	if (!util_av->coll_mc) {
+		ret = util_coll_av_init();
+		if (ret)
+			return ret;
+	}
 
 	av_set = calloc(1,sizeof(*av_set));
 	if (!av_set)
@@ -431,7 +472,7 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 
 	for (iter = 0; iter < attr->count; iter++) {
 		av_set->fi_addr_array[iter] =
-			addr_list.array[iter*attr->stride];
+			av->coll_mc->av_set->fi_addr_arry[iter*attr->stride];
 		av_set->fi_addr_count++;
 	}
 
@@ -480,7 +521,12 @@ ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 {
 	struct util_coll_item *item;
+	struct util_coll_xfer_item *xfer_item;
+	struct util_coll_reduce_item *reduce_item;
+	struct util_coll_copy_item *copy_item;
 	struct slist_entry *entry;
+	struct fi_msg_tagged msg;
+	struct iovec iov;
 	int ret;
 
 	while (!dlist_empty(&coll_mc->work_list)) {
@@ -488,18 +534,52 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 		item = container_of(entry, struct util_coll_mc, entry);
 		switch (item->type) {
 		case UTIL_COLL_SEND:
+			xfer_item = (struct util_coll_xfer_itme *) item;
+			iov = {
+				.iov_base = xfer_item->buf,
+				.iov_len = (xfer_item->count *
+					    SIZE_OF(xfer_item->datatype)),
+			};
+			msg.msg_iov = &iov;
+			msg.iov_count = 1;
+			msg.addr = coll_mc->member_array[coll_mc->my_rank];
+			msg.tag = tag;
+			msg.context = (void *) coll_mc;
+			ret = fi_tsendmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
+			if (ret)
+				return ret;
 			break;
 		case UTIL_COLL_RECV:
+			xfer_item = (struct util_coll_xfer_itme *) item;
+			iov = {
+				.iov_base = xfer_item->buf,
+				.iov_len = (xfer_item->count *
+					    SIZE_OF(xfer_item->datatype)),
+			};
+			msg.msg_iov = &iov;
+			msg.iov_count = 1;
+			msg.addr = coll_mc->member_array[coll_mc->my_rank];
+			msg.tag = tag;
+			msg.context = (void *) coll_mc;
+			ret = fi_trecvmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
+			if (ret)
+				return ret;
 			break;
 		case UTIL_COLL_REDUCE:
+			reduce_item = (struct util_coll_reduce_item *) item;
+
 			break;
 		case UTIL_COLL_COPY:
+			copy_item = (struct util_coll_copy_item *) item;
+			memcpy(copy_item->out_buf, copy_item->in_buf,
+			       copy_item->out_count * SIZE_OF(copy_item->out_datatype));
 			break;
 		default:
 			break;
 		}
 
-		if (item->is_barrier)
+		if (item->is_barrier &&
+		    !dlist_empty(&coll_mc->pend_work_list))
 			break;
 	}
 	return FI_SUCCESS;
