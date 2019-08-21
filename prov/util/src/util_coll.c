@@ -56,27 +56,115 @@
 
 int ofi_av_set_union(struct fid_av_set *dst, const struct fid_av_set *src)
 {
-	return -FI_ENOSYS;
+	struct util_av_set *src_av_set;
+	struct util_av_set *dst_av_set;
+	size_t temp_count;
+	int i,j;
+
+	src_av_set = container_of(src, struct util_av_set, av_set_fid);
+	dst_av_set = container_of(dst, struct util_av_set, av_set_fid);
+
+	assert(src_av_set->av == dst_av_set->av);
+	temp_count = dst_av_set->fi_addr_count;
+
+	for (i = 0; i < src_av_set->fi_addr_count; i++) {
+		for (j = 0; j < dst_av_set->fi_addr_count; j++) {
+			if (dst_av_set->fi_addr_array[j] ==
+			    src_av_set->fi_addr_array[i])
+				break;
+		}
+		if (j == dst_av_set->fi_addr_count) {
+			dst_av_set->fi_addr_array[temp_count++] =
+				src_av_set->fi_addr_array[i];
+		}
+	}
+
+	dst_av_set->fi_addr_count = temp_count;
+	return FI_SUCCESS;
 }
 
 int ofi_av_set_intersect(struct fid_av_set *dst, const struct fid_av_set *src)
 {
-	return -FI_ENOSYS;
+	struct util_av_set *src_av_set;
+	struct util_av_set *dst_av_set;
+	int i,j, temp;
+
+	src_av_set = container_of(src, struct util_av_set, av_set_fid);
+	dst_av_set = container_of(dst, struct util_av_set, av_set_fid);
+
+	assert(src_av_set->av == dst_av_set->av);
+
+	temp = 0;
+	for (i = 0; i < src_av_set->fi_addr_count; i++) {
+		for (j = temp; j < dst_av_set->fi_addr_count; j++) {
+			if (dst_av_set->fi_addr_array[j] ==
+			    src_av_set->fi_addr_array[i]) {
+				dst_av_set->fi_addr_array[temp++] =
+					dst_av_set->fi_addr_array[j];
+				break;
+			}
+		}
+	}
+	dst_av_set->fi_addr_count = temp;
+	return FI_SUCCESS;
 }
 
 int ofi_av_set_diff(struct fid_av_set *dst, const struct fid_av_set *src)
 {
-	return -FI_ENOSYS;
+
+	struct util_av_set *src_av_set;
+	struct util_av_set *dst_av_set;
+	int i,j, temp;
+
+	src_av_set = container_of(src, struct util_av_set, av_set_fid);
+	dst_av_set = container_of(dst, struct util_av_set, av_set_fid);
+
+	assert(src_av_set->av == dst_av_set->av);
+
+	temp = dst_av_set->fi_addr_count;
+	for (i = 0; i < src_av_set->fi_addr_count; i++) {
+		for (j = 0; j < temp; j++) {
+			if (dst_av_set->fi_addr_array[j] ==
+			    src_av_set->fi_addr_array[i]) {
+				dst_av_set->fi_addr_array[--temp] =
+					dst_av_set->fi_addr_array[j];
+				break;
+			}
+		}
+	}
+	dst_av_set->fi_addr_count = temp;
+	return FI_SUCCESS;
 }
 
 int ofi_av_set_insert(struct fid_av_set *set, fi_addr_t addr)
 {
-	return -FI_ENOSYS;
+	struct util_av_set *av_set = container_of(set, struct util_av_set,
+						  av_set_fid);
+	int i;
+
+	for (i = 0; i < av_set->fi_addr_count; i++) {
+		if (av_set->fi_addr_array[i] == addr)
+			return -FI_EINVAL;
+	}
+	av_set->fi_addr_arraY[av_set->fi_addr_count++] = addr;
+	return FI_SUCCESS;
 }
 
 int ofi_av_set_remove(struct fid_av_set *set, fi_addr_t addr)
+
 {
-	return -FI_ENOSYS;
+	struct util_av_set *av_set = container_of(set, struct util_av_set,
+						  av_set_fid);
+	int i;
+
+	for (i = 0; i < av_set->fi_addr_count; i++) {
+		if (av_set->fi_addr_array[i] == addr) {
+			av_set->fi_addr_arraY[i] =
+				av_set->fi_addr_arraY[--av_set->fi_addr_count];
+			return FI_SUCCESS;
+		}
+	}
+	return -FI_EINVAL;
 }
 
 static inline void util_coll_init_cid()
@@ -466,7 +554,7 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 		goto err1;
 
 	av_set->fi_addr_array =
-		calloc(attr->count, sizeof(*av_set->fi_addr_array));
+		calloc(util_av->count, sizeof(*av_set->fi_addr_array));
 	if (!av_set->fi_addr_array)
 		goto err2;
 
