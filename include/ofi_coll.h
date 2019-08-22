@@ -59,11 +59,14 @@ enum coll_work_type {
 	UTIL_COLL_RECV,
 	UTIL_COLL_REDUCE,
 	UTIL_COLL_COPY,
+	UTIL_COLL_JOIN_COMPLETE,
 };
 
 struct util_coll_hdr {
 	struct slist_entry	entry;
 	enum coll_work_type	type;
+	/* only valid for xfer_item*/
+	uint64_t		tag;
 	int 			is_barrier;
 }
 struct util_coll_xfer_item {
@@ -93,19 +96,26 @@ struct util_coll_reduce_item {
 	enum fi_op		op;
 };
 
+typedef void (*util_coll_report_comp_t)(struct util_eq, eq);
+
+struct util_coll_comp_item {
+	struct util_coll_hdr	hdr;
+	uint64_t		cid_buf[OFI_CONTEXT_ID_SIZE];
+	uint64_t		tmp_cid_buf[OFI_CONTEXT_ID_SIZE];
+	util_coll_report_comp_t comp_fn;
+};
+
 struct util_coll_mc {
 	struct fid_mc		mc_fid;
 	struct fid_ep		*ep;
 	struct util_av_set 	*av_set;
 	struct slist		pend_work_list;
 	struct slist		work_list;
-	struct fi_addr_t	*member_array;
-	int			cid;
+	fi_addr_t		*member_array;
 	int 			num_members;
-	int 			my_id;
-	uint64_t		comm_id;
-	enum barrier_state	state;
-	uint16_t		seq_num;
+	int 			my_rank;
+	uint16_t		cid;
+	uint16_t		tag_seq;
 	ofi_atomic32_t		ref;
 };
 
