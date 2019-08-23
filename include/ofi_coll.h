@@ -116,6 +116,7 @@ struct util_coll_mc {
 	int 			my_rank;
 	uint16_t		cid;
 	uint16_t		tag_seq;
+	int			scratch_buf;
 	ofi_atomic32_t		ref;
 };
 

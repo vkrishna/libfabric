@@ -198,8 +198,9 @@ static inline int util_coll_pof2(int num)
 	return (pof2 >> 1);
 }
 
-static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest, void *buf,
-				int count, enum fi_datatype datatype, int is_barrier)
+static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest,
+				void *buf, int count, enum fi_datatype datatype,
+				uint64_t tag, int is_barrier)
 {
 	struct util_coll_xfer_item *xfer_item;
 
@@ -217,8 +218,9 @@ static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest, void *bu
 	return FI_SUCCESS;
 }
 
-static int util_coll_sched_recv(struct util_coll_mc *coll_mc, int src, void *buf,
-				int count, enum fi_datatype datatype, int is_barrier)
+static int util_coll_sched_recv(struct util_coll_mc *coll_mc, int src,
+				void *buf, int count, enum fi_datatype datatype,
+				uint64_t tag, int is_barrier)
 {
 	struct util_coll_xfer_item *xfer_item;
 
@@ -288,11 +290,13 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 			void *recv_buf, int count, fi_datatype datatype,
 			fi_op op)
 {
+	uint64_t tag;
 	int rem, pof2, my_new_id;
 	int dest, new_dest;
 	int ret;
 	int mask = 1;
 
+	tag = util_coll_get_next_tag(coll_mc);
 	pof2 = util_coll_pof2(coll_mc->num_members);
 	rem = coll_mc->num_members - pof2;
 
@@ -300,7 +304,7 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 		if (coll_mc->my_id % 2 == 0) {
 			ret = util_coll_sched_send(coll_mc, send_buf,
 						   coll_mc->my_id + 1,
-						   count, datatype, 1);
+						   count, datatype, tag,1);
 			if (ret)
 				return ret;
 
@@ -308,7 +312,7 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 		} else {
 			ret = util_coll_sched_recv(coll_mc, recv_buf,
 						   coll_mc->my_id - 1,
-						   count, datatype, 1);
+						   count, datatype, tag, 1);
 			if (ret)
 				return ret;
 
@@ -330,11 +334,11 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 				new_dest + rem;
 
 			ret = util_coll_sched_recv(coll_mc, dest, recv_buf,
-						   count, datatype, 0);
+						   count, datatype, tag, 0);
 			if (ret)
 				return ret;
 			ret = util_coll_sched_send(coll_mc, dest, send_buf,
-						   count, datatype, 1);
+						   count, datatype, tag, 1);
 			if (ret)
 				return ret;
 
@@ -364,17 +368,15 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 		if (coll_mc->my_id % 2) {
 			ret = util_coll_sched_send(coll_mc, send_buf,
 						   coll_mc->my_id - 1,
-						   count, datatype, 0);
+						   count, datatype, tag, 0);
 			if (ret)
 				return ret;
-
 		} else {
 			ret = util_coll_sched_recv(coll_mc, send_buf,
 						   coll_mc->my_id + 1,
-						   count, datatype, 0);
+						   count, datatype, tag, 0);
 			if (ret)
 				return ret;
-
 		}
 	}
 	return FI_SUCCESS;
@@ -426,7 +428,43 @@ static int util_coll_find_my_rank(struct util_coll_mc *coll_mc)
 	return FI_SUCCESS;
 }
 
-void util_coll_join_comp(struct util_eq *eq)
+void util_coll_join_comp(struct util_coll_mc *coll_mc,
+			 struct util_coll_comp_item *comp)
+{
+	struct util_eq *eq;
+	struct util_ep *ep;
+	uint64_t tmp;
+	int iter, lsb_set_pos = 0, pos;
+
+	for (iter = 0; iter < OFI_CONTEXT_ID_SIZE; iter++) {
+
+		if (comp->cid_buf[iter]) {
+			tmp = comp->cid_buf[iter];
+			pos = 0;
+			while (!(tmp & 0x1)) {
+				tmp >>= 1;
+				pos++;
+			}
+
+			/* clear the bit from global cid space */
+			util_coll_cid[iter] ^= (1 << pos);
+			lsb_set_pos += pos;
+		} else {
+			lsb_set_pos += sizeof(comp->cid_buf[0]) * 8;
+		}
+	}
+	assert(lsb_set_pos < OFI_CONTEXT_ID_SIZE * 8);
+	coll_mc->cid = lsb_set_pos;
+	coll_mc->tag_seq = 0;
+
+	/* write to the eq  */
+	ep  = container_of(coll_mc->ep, struct util_ep, ep_fid);
+	ofi_eq_write(&ep->eq->eq_fid, uint32_t event,
+		     const void *buf, size_t len, FI_COLLECTIVE);
+
+}
+
+void util_coll_barrier_comp(struct util_eq *eq)
 {
 
 }
@@ -639,25 +677,14 @@ ssize_t util_coll_handle_comp(struct fid_ep *ep,
 ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 {
 	struct util_coll_mc *coll_mc = (struct util_coll_mc *) coll_addr;
-	fi_addr_t my_fi_addr;
-	fi_addr_t target_addr;
-	fi_addr_t source_addr;
-	struct fi_msg_tagged msg;
 
-	assert(ep == coll_mc->ep);
-	my_fi_addr = coll_mc->member_array[coll_mc->my_id];
+	ret = util_coll_allreduce(coll_mc, coll_mc->scratch_buf,
+				  coll_mc->scratch_buf, 1, FI_UINT8,
+				  FI_BAND);
+	if (ret)
+		return ret;
 
-	source_addr = coll_mc->member_array[coll_mc->num_members - 1];
-	fi_trecv(ep, );
-	coll_mc->state = BARRIER_INIT;
-
-	if (!coll_mc->my_id) {
-		target_addr = coll_mc->member_array[(coll_mc->my_id + 1) %
-						    coll_mc->num_members];
-		fi_tsend();
-	}
-
-	return -FI_ENOSYS;
+	return FI_SUCCESS;
 }
 
 static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
