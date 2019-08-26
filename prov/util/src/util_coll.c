@@ -333,7 +333,7 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 			if (ret)
 				return ret;
 
-			my_new_id /= 2;
+			my_new_id = coll_mc->my_rank / 2;
 
 			ret = util_coll_sched_reduce(coll_mc, recv_buf, send_buf,
 						     count, datatype, op, 1);
@@ -341,7 +341,7 @@ static int util_coll_allreduce(struct util_coll_mc *coll_mc, void *send_buf,
 				return ret;
 		}
 	} else {
-		my_new_id = coll_mc->my_rank;
+		my_new_id = coll_mc->my_rank - rem;
 	}
 
 	if (my_new_id != -1) {
@@ -420,23 +420,23 @@ static struct fi_ops util_coll_fi_ops = {
 static int util_coll_find_my_rank(struct fid_ep *ep,
 				  struct util_coll_mc *coll_mc)
 {
-	size_t *addrlen;
+	size_t addrlen;
 	char *addr;
 	int ret, mem;
 
-	*addrlen = sizeof(mem);
+	addrlen = sizeof(mem);
 	addr = (char *) &mem;
 
-	ret = fi_getname(&ep->fid, addr, addrlen);
+	ret = fi_getname(&ep->fid, addr, &addrlen);
 	if (ret != -FI_ETOOSMALL) {
 		return ret;
 	}
 
-	addr = calloc(1, *addrlen);
+	addr = calloc(1, addrlen);
 	if (!addr)
 		return -FI_ENOMEM;
 
-	ret = fi_getname(&ep->fid, addr, addrlen);
+	ret = fi_getname(&ep->fid, addr, &addrlen);
 	if (ret) {
 		free(addr);
 		return ret;
@@ -615,7 +615,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	new_coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
 	new_coll_mc->mc_fid.fid.context = context;
 	new_coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
-	new_coll_mc->mc_fid.fi_addr = new_coll_mc;
+	new_coll_mc->mc_fid.fi_addr = (uintptr_t) new_coll_mc;
 	new_coll_mc->ep = ep;
 	new_coll_mc->av_set = av_set;
 	new_coll_mc->member_array = av_set->fi_addr_array;
@@ -721,7 +721,7 @@ static int util_coll_av_init(struct util_av *av)
 	assert(coll_mc->av_set->fi_addr_count == av->count);
 	coll_mc->av_set->av_set_fid.ops = &util_av_set_ops;
 
-	coll_mc->mc_fid.fi_addr = coll_mc;
+	coll_mc->mc_fid.fi_addr = (uintptr_t) coll_mc;
 	coll_mc->member_array = coll_mc->av_set->fi_addr_array;
 	coll_mc->num_members = coll_mc->av_set->fi_addr_count;
 
@@ -788,8 +788,8 @@ ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 	struct util_coll_comp_item *comp_item;
 	int ret;
 
-	ret = util_coll_allreduce(coll_mc, coll_mc->scratch_buf,
-				  coll_mc->scratch_buf, 1, FI_UINT8,
+	ret = util_coll_allreduce(coll_mc, &coll_mc->scratch_buf,
+				  &coll_mc->scratch_buf, 1, FI_UINT8,
 				  FI_BAND);
 	if (ret)
 		return ret;
