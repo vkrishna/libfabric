@@ -611,7 +611,7 @@ static inline
 ssize_t rxm_cq_handle_coll(struct rxm_rx_buf *rx_buf)
 {
 	util_coll_handle_comp(rx_buf->pkt.hdr.tag,
-			      rx_buf->recv_queue->context);
+			      rx_buf->recv_entry->context);
 	rxm_recv_entry_release(rx_buf->recv_entry->recv_queue,
 			       rx_buf->recv_entry);
 	return FI_SUCCESS;
