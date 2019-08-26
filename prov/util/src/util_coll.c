@@ -285,9 +285,11 @@ static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 	return FI_SUCCESS;
 }
 
-uint64_t util_coll_get_next_tag(struct util_coll_mc *coll_mc)
+static inline uint64_t util_coll_get_next_tag(struct util_coll_mc *coll_mc)
 {
-	return 0;
+	return (coll_mc->my_rank << 32 |
+		coll_mc->cid  << 16 |
+		coll_mc->tag_seq++);
 }
 
 /* TODO: when this fails, clean up the already scheduled work in this function */
