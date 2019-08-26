@@ -129,7 +129,7 @@ enum {
 	FI_MR_COMPLETE,
 	FI_AV_COMPLETE,
 	FI_JOIN_COMPLETE,
-	FI_COLLECTIVE,
+	FI_COLL,
 };
 
 struct fi_eq_entry {

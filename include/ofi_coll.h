@@ -33,11 +33,10 @@
 #ifndef _OFI_COLL_H_
 #define _OFI_COLL_H_
 
+#include <rdma/fi_collective.h>
+
 #define OFI_WORLD_CONTEXT_ID 0
 #define OFI_CONTEXT_ID_SIZE 4
-
-uint64_t util_coll_cid[OFI_CONTEXT_ID_SIZE];
-bool util_coll_cid_initialized = FALSE;
 
 enum barrier {
 	NO_BARRIER,
@@ -69,7 +68,8 @@ struct util_coll_hdr {
 	/* only valid for xfer_item*/
 	uint64_t		tag;
 	int 			is_barrier;
-}
+};
+
 struct util_coll_xfer_item {
 	struct util_coll_hdr	hdr;
 	void 			*buf;
@@ -97,13 +97,16 @@ struct util_coll_reduce_item {
 	enum fi_op		op;
 };
 
-typedef void (*util_coll_report_comp_t)(struct util_eq, eq);
+struct util_coll_comp_item;
+
+typedef void (*util_coll_comp_t)(struct util_coll_mc *coll_mc,
+				 struct util_coll_comp_item *comp);
 
 struct util_coll_comp_item {
 	struct util_coll_hdr	hdr;
 	uint64_t		cid_buf[OFI_CONTEXT_ID_SIZE];
 	uint64_t		tmp_cid_buf[OFI_CONTEXT_ID_SIZE];
-	util_coll_report_comp_t comp_fn;
+	util_coll_comp_t	comp_fn;
 };
 
 struct util_coll_mc {
