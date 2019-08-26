@@ -60,6 +60,7 @@ enum coll_work_type {
 	UTIL_COLL_REDUCE,
 	UTIL_COLL_COPY,
 	UTIL_COLL_JOIN_COMPLETE,
+	UTIL_COLL_BARRIER_COMPLETE,
 };
 
 struct util_coll_hdr {
