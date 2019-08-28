@@ -486,7 +486,7 @@ void util_coll_join_comp(struct util_coll_mc *coll_mc,
 	ep  = container_of(coll_mc->ep, struct util_ep, ep_fid);
 	if (ofi_eq_write(&ep->eq->eq_fid, FI_JOIN_COMPLETE,
 			 &entry, (size_t) bytes, FI_COLLECTIVE) < 0)
-		FI_WARN(ep->domain->fabric->prov, FI_LOG_FABRIC,
+		FI_WARN(ep->domain->fabric->prov, FI_LOG_DOMAIN,
 			"join collective - eq write failed\n");
 }
 
@@ -506,7 +506,7 @@ void util_coll_barrier_comp(struct util_coll_mc *coll_mc,
 	ep  = container_of(coll_mc->ep, struct util_ep, ep_fid);
 	if (ofi_eq_write(&ep->eq->eq_fid, FI_COLL,
 			 &entry, (size_t) bytes, FI_COLLECTIVE) < 0)
-		FI_WARN(ep->domain->fabric->prov, FI_LOG_FABRIC,
+		FI_WARN(ep->domain->fabric->prov, FI_LOG_DOMAIN,
 			"barrier collective - eq write failed\n");
 }
 
@@ -522,7 +522,7 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 	int ret;
 
 	while (!slist_empty(&coll_mc->work_list)) {
-		entry = slist_remove_head(&coll_mc->pend_work_list);
+		entry = slist_remove_head(&coll_mc->work_list);
 		hdr = container_of(entry, struct util_coll_hdr, entry);
 		switch (hdr->type) {
 		case UTIL_COLL_SEND:
@@ -538,6 +538,8 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 			ret = fi_tsendmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
 			if (ret)
 				return ret;
+
+			slist_insert_tail(entry, &coll_mc->pend_work_list);
 			break;
 		case UTIL_COLL_RECV:
 			xfer_item = (struct util_coll_xfer_item *) hdr;
@@ -552,6 +554,8 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 			ret = fi_trecvmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
 			if (ret)
 				return ret;
+
+			slist_insert_tail(entry, &coll_mc->pend_work_list);
 			break;
 		case UTIL_COLL_REDUCE:
 			reduce_item = (struct util_coll_reduce_item *) hdr;
@@ -598,6 +602,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	av_set = container_of(set, struct util_av_set, av_set_fid);
 
 	if (coll_addr == FI_ADDR_NOTAVAIL) {
+		assert(av_set->av->coll_mc != NULL);
 		coll_mc = av_set->av->coll_mc;
 	} else {
 		coll_mc = (struct util_coll_mc *) coll_addr;
@@ -616,7 +621,9 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	new_coll_mc->mc_fid.fid.context = context;
 	new_coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
 	new_coll_mc->mc_fid.fi_addr = (uintptr_t) new_coll_mc;
+
 	new_coll_mc->ep = ep;
+	coll_mc->ep = ep;
 	new_coll_mc->av_set = av_set;
 	new_coll_mc->member_array = av_set->fi_addr_array;
 	new_coll_mc->num_members = av_set->fi_addr_count;
@@ -631,7 +638,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		goto err1;
 	}
 
-	if (new_coll_mc->my_rank == FI_ADDR_NOTAVAIL) {
+	if (new_coll_mc->my_rank != FI_ADDR_NOTAVAIL) {
 		memcpy(comp_item->cid_buf, util_coll_cid,
 		       OFI_CONTEXT_ID_SIZE * sizeof(uint64_t));
 	} else {
@@ -670,11 +677,6 @@ static struct fi_ops_av_set util_av_set_ops= {
 	.remove		=	ofi_av_set_remove,
 };
 
-void util_coll_av_close(struct util_av *av)
-{
-
-}
-
 static int util_coll_copy_from_av(struct util_av *av, void *addr,
 			      fi_addr_t fi_addr, void *arg)
 {
@@ -702,37 +704,47 @@ static int util_coll_av_init(struct util_av *av)
 
 	coll_mc->av_set = calloc(1, sizeof(*coll_mc->av_set));
 	if (!coll_mc->av_set) {
-		free(coll_mc);
-		return -FI_ENOMEM;
+		ret = -FI_ENOMEM;
+		goto err1;
 	}
 
-	coll_mc->av_set->av_set_fid.fid.fclass = FI_CLASS_AV_SET;
+	coll_mc->av_set->fi_addr_array =
+		calloc(av->count, sizeof(*coll_mc->av_set->fi_addr_array));
+	if (!coll_mc->av_set->fi_addr_array) {
+		ret = -FI_ENOMEM;
+		goto err2;
+	}
 
 	ret = fastlock_init(&coll_mc->av_set->lock);
 	if (ret)
-		goto err1;
+		goto err3;
 
 	coll_mc->av_set->av = av;
 	ret = ofi_av_elements_iter(av, util_coll_copy_from_av,
 				   (void *)coll_mc->av_set);
 	if (ret)
-		goto err2;
+		goto err4;
 
-	assert(coll_mc->av_set->fi_addr_count == av->count);
+	coll_mc->av_set->av_set_fid.fid.fclass = FI_CLASS_AV_SET;
 	coll_mc->av_set->av_set_fid.ops = &util_av_set_ops;
 
-	coll_mc->mc_fid.fi_addr = (uintptr_t) coll_mc;
 	coll_mc->member_array = coll_mc->av_set->fi_addr_array;
 	coll_mc->num_members = coll_mc->av_set->fi_addr_count;
 
+	coll_mc->mc_fid.fi_addr = (uintptr_t) coll_mc;
 	coll_mc->mc_fid.fid.fclass = FI_CLASS_MC;
 	coll_mc->mc_fid.fid.context = NULL;
 	coll_mc->mc_fid.fid.ops = &util_coll_fi_ops;
+	av->coll_mc = coll_mc;
 	return FI_SUCCESS;
-err2:
+
+err4:
 	fastlock_destroy(&coll_mc->av_set->lock);
-err1:
+err3:
+	free(coll_mc->av_set->fi_addr_array);
+err2:
 	free(coll_mc->av_set);
+err1:
 	free(coll_mc);
 	return ret;
 }
@@ -770,6 +782,7 @@ int ofi_av_set(struct fid_av *av, struct fi_av_set_attr *attr,
 		av_set->fi_addr_count++;
 	}
 
+	av_set->av = util_av;
 	av_set->av_set_fid.ops = &util_av_set_ops;
 	av_set->av_set_fid.fid.fclass = FI_CLASS_AV_SET;
 	av_set->av_set_fid.fid.context = context;
