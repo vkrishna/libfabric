@@ -307,6 +307,28 @@ static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 	return FI_SUCCESS;
 }
 
+static int util_coll_sched_comp(struct util_coll_mc *coll_mc,
+				enum util_coll_op_type op_type,
+				void *data, util_coll_comp_t comp_fn)
+{
+	struct util_coll_comp_item *comp_item;
+
+	comp_item = calloc(1, sizeof(*comp_item));
+	if (!comp_item)
+		return -FI_ENOMEM;
+
+	comp_item->hdr.type = UTIL_COLL_COMP;
+	comp_item->hdr.is_barrier = 0;
+
+	comp_item->op_type = op_type;
+	comp_item->data = data;
+	comp_item->comp_fn = comp_fn;
+
+	slist_insert_tail(&comp_item->hdr.entry, &coll_mc->work_list);
+	UTIL_COLL_LOG(coll_mc, "scheduled comp\n");
+	return FI_SUCCESS;
+}
+
 static inline uint64_t util_coll_get_next_tag(struct util_coll_mc *coll_mc)
 {
 	uint64_t tag = coll_mc->my_rank;
@@ -465,16 +487,19 @@ void util_coll_join_comp(struct util_coll_mc *coll_mc,
 			 struct util_coll_comp_item *comp)
 {
 	struct fi_eq_err_entry entry;
+	struct util_coll_join_comp_data *comp_data;
 	struct util_ep *ep;
 	ssize_t bytes;
 	uint64_t tmp;
 	int iter, lsb_set_pos = 0, pos;
 
+	comp_data = (struct util_coll_join_comp_data *)comp->data;
+
 	UTIL_COLL_LOG(coll_mc, "completion processing\n");
 	for (iter = 0; iter < OFI_CONTEXT_ID_SIZE; iter++) {
 
-		if (comp->cid_buf[iter]) {
-			tmp = comp->cid_buf[iter];
+		if (comp_data->cid_buf[iter]) {
+			tmp = comp_data->cid_buf[iter];
 			pos = 0;
 			while (!(tmp & 0x1)) {
 				tmp >>= 1;
@@ -485,7 +510,7 @@ void util_coll_join_comp(struct util_coll_mc *coll_mc,
 			util_coll_cid[iter] ^= (1 << pos);
 			lsb_set_pos += pos;
 		} else {
-			lsb_set_pos += sizeof(comp->cid_buf[0]) * 8;
+			lsb_set_pos += sizeof(comp_data->cid_buf[0]) * 8;
 		}
 	}
 	assert(lsb_set_pos < OFI_CONTEXT_ID_SIZE * 8);
@@ -531,6 +556,7 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 	struct util_coll_xfer_item *xfer_item;
 	struct util_coll_reduce_item *reduce_item;
 	struct util_coll_copy_item *copy_item;
+	struct util_coll_comp_item *comp_item;
 	struct slist_entry *entry;
 	struct fi_msg_tagged msg = {0};
 	struct iovec iov;
@@ -591,8 +617,11 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 			       copy_item->out_count * SIZE_OF(copy_item->out_datatype));
 			UTIL_COLL_LOG(coll_mc, "processing copy\n");
 			break;
-		case UTIL_COLL_OP_COMPLETE:
-
+		case UTIL_COLL_COMP:
+			comp_item = (struct util_coll_comp_item *) hdr;
+			if (comp_item->comp_fn)
+				comp_item->comp_fn(coll_mc, comp_item);
+			UTIL_COLL_LOG(coll_mc, "processing completion\n");
 			break;
 		default:
 			UTIL_COLL_LOG(coll_mc, "processing unknown!!\n");
@@ -627,7 +656,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	struct util_coll_mc *new_coll_mc;
 	struct util_av_set *av_set;
 	struct util_coll_mc *coll_mc;
-	struct util_coll_comp_item *comp_item;
+	struct util_coll_join_comp_data *comp_data;
 	int ret;
 
 	av_set = container_of(set, struct util_av_set, av_set_fid);
@@ -663,38 +692,37 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	util_coll_find_my_rank(ep, new_coll_mc);
 	util_coll_find_my_rank(ep, coll_mc);
 
-	comp_item = calloc(1, sizeof(*comp_item));
-	if (!comp_item) {
+	comp_data = calloc(1, sizeof(*comp_data));
+	if (!comp_data) {
 		ret =  -FI_ENOMEM;
 		goto err1;
 	}
 
 	if (new_coll_mc->my_rank != FI_ADDR_NOTAVAIL) {
-		memcpy(comp_item->cid_buf, util_coll_cid,
+		memcpy(comp_data->cid_buf, util_coll_cid,
 		       OFI_CONTEXT_ID_SIZE * sizeof(uint64_t));
 	} else {
-		util_coll_init_cid(comp_item->cid_buf);
+		util_coll_init_cid(comp_data->cid_buf);
 	}
 
-	ret = util_coll_allreduce(coll_mc, comp_item->cid_buf,
-				  comp_item->tmp_cid_buf,
+	ret = util_coll_allreduce(coll_mc, comp_data->cid_buf,
+				  comp_data->tmp_cid_buf,
 				  OFI_CONTEXT_ID_SIZE, FI_INT64,
 				  FI_BAND);
 	if (ret)
 		goto err2;
 
-	comp_item->hdr.type = UTIL_COLL_OP_COMPLETE;
-	comp_item->hdr.is_barrier = 1;
-	comp_item->comp_fn = util_coll_join_comp;
-	slist_insert_tail(&comp_item->hdr.entry, &coll_mc->work_list);
+	ret = util_coll_sched_comp(coll_mc, UTIL_COLL_JOIN_OP,
+			     comp_data, util_coll_join_comp);
+	if (ret)
+		goto err2;
 
 	*mc = &new_coll_mc->mc_fid;
-
 	util_coll_schedule(coll_mc);
 	return FI_SUCCESS;
 
 err2:
-	free(comp_item);
+	free(comp_data);
 err1:
 	free(new_coll_mc);
 	return ret;
@@ -842,10 +870,8 @@ ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 	if (!comp_item)
 		return -FI_ENOMEM;
 
-	comp_item->hdr.type = UTIL_COLL_OP_COMPLETE;
-	comp_item->hdr.is_barrier = 1;
-	comp_item->comp_fn = util_coll_barrier_comp;
-	slist_insert_tail(&comp_item->hdr.entry, &coll_mc->work_list);
+	util_coll_sched_comp(coll_mc, UTIL_COLL_BARRIER_OP,
+			     NULL, util_coll_barrier_comp);
 
 	util_coll_schedule(coll_mc);
 	return FI_SUCCESS;

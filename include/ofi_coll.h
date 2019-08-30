@@ -38,9 +38,16 @@
 #define OFI_WORLD_CONTEXT_ID 0
 #define OFI_CONTEXT_ID_SIZE 4
 
-enum barrier {
+enum barrier_type {
 	NO_BARRIER,
 	BARRIER,
+};
+
+enum util_coll_op_type {
+	UTIL_COLL_JOIN_OP,
+	UTIL_COLL_BARRIER_OP,
+	UTIL_COLL_ALLREDUCE_OP,
+	UTIL_COLL_BROADCAST_OP,
 };
 
 struct util_av_set {
@@ -58,7 +65,7 @@ enum coll_work_type {
 	UTIL_COLL_RECV,
 	UTIL_COLL_REDUCE,
 	UTIL_COLL_COPY,
-	UTIL_COLL_OP_COMPLETE,
+	UTIL_COLL_COMP,
 };
 
 struct util_coll_hdr {
@@ -105,10 +112,15 @@ struct util_coll_comp_item;
 typedef void (*util_coll_comp_t)(struct util_coll_mc *coll_mc,
 				 struct util_coll_comp_item *comp);
 
-struct util_coll_comp_item {
-	struct util_coll_hdr	hdr;
+struct util_coll_join_comp_data {
 	uint64_t		cid_buf[OFI_CONTEXT_ID_SIZE];
 	uint64_t		tmp_cid_buf[OFI_CONTEXT_ID_SIZE];
+};
+
+struct util_coll_comp_item {
+	struct util_coll_hdr	hdr;
+	enum util_coll_op_type	op_type;
+	void			*data;
 	util_coll_comp_t	comp_fn;
 };
 
