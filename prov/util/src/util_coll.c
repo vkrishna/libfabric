@@ -183,12 +183,12 @@ int ofi_av_set_remove(struct fid_av_set *set, fi_addr_t addr)
 	return -FI_EINVAL;
 }
 
-static inline void util_coll_init_cid()
+static inline void util_coll_init_cid(uint64_t *cid)
 {
 	int i;
 
 	for (i = 0; i < OFI_CONTEXT_ID_SIZE; i++) {
-		util_coll_cid[i] = -1;
+		cid[i] = -1;
 	}
 }
 
@@ -673,7 +673,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 		return ret;
 
 	if (util_coll_cid_initialized == 0) {
-		util_coll_init_cid();
+		util_coll_init_cid(util_coll_cid);
 		util_coll_cid_initialized = 1;
 	}
 
@@ -753,7 +753,7 @@ static int util_coll_av_init(struct util_av *av)
 	assert(!av->coll_mc);
 
 	if (util_coll_cid_initialized == 0) {
-		util_coll_init_cid();
+		util_coll_init_cid(util_coll_cid);
 		util_coll_cid_initialized = 1;
 	}
 
