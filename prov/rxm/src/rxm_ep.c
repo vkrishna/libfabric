@@ -952,7 +952,9 @@ rxm_ep_msg_normal_send(struct rxm_conn *rxm_conn, struct rxm_pkt *tx_pkt,
 	FI_DBG(&rxm_prov, FI_LOG_EP_DATA, "Posting send with length: %" PRIu64
 	       " tag: 0x%" PRIx64 "\n", pkt_size, tx_pkt->hdr.tag);
 
-	assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) || !tx_pkt->hdr.flags);
+	assert((tx_pkt->hdr.flags & FI_REMOTE_CQ_DATA) ||
+	       (tx_pkt->hdr.flags & OFI_COLLECTIVE_MSG) ||
+	       !tx_pkt->hdr.flags);
 
 	return fi_send(rxm_conn->msg_ep, tx_pkt, pkt_size, desc, 0, context);
 }
@@ -1313,12 +1315,18 @@ rxm_ep_send_common(struct rxm_ep *rxm_ep, struct rxm_conn *rxm_conn,
 			goto unlock;
 		}
 
+		FI_WARN(&rxm_prov, FI_LOG_CQ, "eager limit\n");
 		rxm_ep_format_tx_buf_pkt(rxm_conn, data_len, op, data, tag,
 					 flags, &tx_buf->pkt);
 		ofi_copy_from_iov(tx_buf->pkt.data, tx_buf->pkt.hdr.size,
 				  iov, count, 0);
 		tx_buf->app_context = context;
 		tx_buf->flags = flags;
+
+		if (flags & FI_COLLECTIVE)
+			tx_buf->pkt.hdr.flags |= OFI_COLLECTIVE_MSG;
+		else
+			tx_buf->pkt.hdr.flags &= OFI_COLLECTIVE_MSG;
 
 		ret = rxm_ep_msg_normal_send(rxm_conn, &tx_buf->pkt, total_len,
 					     tx_buf->hdr.desc, tx_buf);
@@ -1758,6 +1766,7 @@ static ssize_t rxm_ep_tsendmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged
 	if (OFI_UNLIKELY(ret))
 		goto unlock;
 
+	FI_WARN(&rxm_prov, FI_LOG_CQ, "tsendmsg\n");
 	ret = rxm_ep_send_common(rxm_ep, rxm_conn, msg->msg_iov, msg->desc,
 				  msg->iov_count, msg->context, msg->data,
 				  flags | rxm_ep->util_ep.tx_msg_flags, msg->tag,

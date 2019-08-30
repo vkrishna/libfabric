@@ -52,6 +52,7 @@
 #include <rdma/fi_collective.h>
 #include <rdma/fi_cm.h>
 #include <ofi_list.h>
+#include <ofi_atomic.h>
 #include <ofi_coll.h>
 
 static uint64_t util_coll_cid[OFI_CONTEXT_ID_SIZE];
@@ -59,6 +60,13 @@ static bool util_coll_cid_initialized = 0;
 
 //fake news
 #define SIZE_OF(x) 0
+
+#define UTIL_COLL_LOG(mc, ...)					\
+	do {								\
+		struct util_ep *ep = container_of((mc)->ep, struct util_ep, \
+						 ep_fid);		\
+		FI_DBG(ep->domain->fabric->prov, FI_LOG_FABRIC, __VA_ARGS__); \
+	} while (0);
 
 int ofi_av_set_union(struct fid_av_set *dst, const struct fid_av_set *src)
 {
@@ -221,8 +229,10 @@ static int util_coll_sched_send(struct util_coll_mc *coll_mc, int dest,
 	xfer_item->buf = buf;
 	xfer_item->count = count;
 	xfer_item->datatype = datatype;
+	xfer_item->dest_rank = dest;
 
 	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
+	UTIL_COLL_LOG(coll_mc, "scheduled send rank = %d\n", coll_mc->my_rank);
 	return FI_SUCCESS;
 }
 
@@ -241,8 +251,10 @@ static int util_coll_sched_recv(struct util_coll_mc *coll_mc, int src,
 	xfer_item->buf = buf;
 	xfer_item->count = count;
 	xfer_item->datatype = datatype;
+	xfer_item->src_rank = src;
 
 	slist_insert_tail(&xfer_item->hdr.entry, &coll_mc->work_list);
+	UTIL_COLL_LOG(coll_mc, "scheduled recv\n");
 	return FI_SUCCESS;
 }
 
@@ -266,6 +278,7 @@ static int util_coll_sched_reduce(struct util_coll_mc *coll_mc, void *in_buf,
 	reduce_item->op = op;
 
 	slist_insert_tail(&reduce_item->hdr.entry, &coll_mc->work_list);
+	UTIL_COLL_LOG(coll_mc, "scheduled reduce\n");
 	return FI_SUCCESS;
 }
 
@@ -290,6 +303,7 @@ static int util_coll_sched_copy(struct util_coll_mc *coll_mc, void *in_buf,
 	copy_item->out_datatype = out_datatype;
 
 	slist_insert_tail(&copy_item->hdr.entry, &coll_mc->work_list);
+	UTIL_COLL_LOG(coll_mc, "scheduled copy\n");
 	return FI_SUCCESS;
 }
 
@@ -456,6 +470,7 @@ void util_coll_join_comp(struct util_coll_mc *coll_mc,
 	uint64_t tmp;
 	int iter, lsb_set_pos = 0, pos;
 
+	UTIL_COLL_LOG(coll_mc, "completion processing\n");
 	for (iter = 0; iter < OFI_CONTEXT_ID_SIZE; iter++) {
 
 		if (comp->cid_buf[iter]) {
@@ -517,11 +532,12 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 	struct util_coll_reduce_item *reduce_item;
 	struct util_coll_copy_item *copy_item;
 	struct slist_entry *entry;
-	struct fi_msg_tagged msg;
+	struct fi_msg_tagged msg = {0};
 	struct iovec iov;
 	int ret;
 
 	while (!slist_empty(&coll_mc->work_list)) {
+		UTIL_COLL_LOG(coll_mc, "looping\n");
 		entry = slist_remove_head(&coll_mc->work_list);
 		hdr = container_of(entry, struct util_coll_hdr, entry);
 		switch (hdr->type) {
@@ -529,50 +545,65 @@ static int util_coll_process_work_items(struct util_coll_mc *coll_mc)
 			xfer_item = (struct util_coll_xfer_item *) hdr;
 			iov.iov_base = xfer_item->buf;
 			iov.iov_len = (xfer_item->count *
-				       SIZE_OF(xfer_item->datatype));
+				       ofi_datatype_size(xfer_item->datatype));
 			msg.msg_iov = &iov;
 			msg.iov_count = 1;
-			msg.addr = coll_mc->member_array[coll_mc->my_rank];
+			msg.addr = coll_mc->member_array[xfer_item->dest_rank];
 			msg.tag = hdr->tag;
 			msg.context = (void *) coll_mc;
-			ret = fi_tsendmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
-			if (ret)
-				return ret;
+			do {
+				ret = fi_tsendmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
+				if (ret && ret != -EAGAIN) {
+					slist_insert_head(&xfer_item->hdr.entry,
+							  &coll_mc->work_list);
+					return ret;
+				}
+			} while (ret == -EAGAIN);
 
 			slist_insert_tail(entry, &coll_mc->pend_work_list);
+			UTIL_COLL_LOG(coll_mc, "to rxm tsendmsg\n");
 			break;
 		case UTIL_COLL_RECV:
 			xfer_item = (struct util_coll_xfer_item *) hdr;
 			iov.iov_base = xfer_item->buf;
 			iov.iov_len = (xfer_item->count *
-				       SIZE_OF(xfer_item->datatype));
+				       ofi_datatype_size(xfer_item->datatype));
 			msg.msg_iov = &iov;
 			msg.iov_count = 1;
-			msg.addr = coll_mc->member_array[coll_mc->my_rank];
+			msg.addr = coll_mc->member_array[xfer_item->src_rank];
 			msg.tag = hdr->tag;
 			msg.context = (void *) coll_mc;
+
 			ret = fi_trecvmsg(coll_mc->ep, &msg, FI_COLLECTIVE);
 			if (ret)
 				return ret;
 
 			slist_insert_tail(entry, &coll_mc->pend_work_list);
+			UTIL_COLL_LOG(coll_mc, "to rxm trecvmsg\n");
 			break;
 		case UTIL_COLL_REDUCE:
 			reduce_item = (struct util_coll_reduce_item *) hdr;
-
+			UTIL_COLL_LOG(coll_mc, "processing reduce\n");
 			break;
 		case UTIL_COLL_COPY:
 			copy_item = (struct util_coll_copy_item *) hdr;
 			memcpy(copy_item->out_buf, copy_item->in_buf,
 			       copy_item->out_count * SIZE_OF(copy_item->out_datatype));
+			UTIL_COLL_LOG(coll_mc, "processing copy\n");
+			break;
+		case UTIL_COLL_OP_COMPLETE:
+
 			break;
 		default:
+			UTIL_COLL_LOG(coll_mc, "processing unknown!!\n");
 			break;
 		}
 
 		if (hdr->is_barrier &&
-		    !slist_empty(&coll_mc->pend_work_list))
+		    !slist_empty(&coll_mc->pend_work_list)) {
+			UTIL_COLL_LOG(coll_mc, "breaking\n");
 			break;
+		}
 	}
 	return FI_SUCCESS;
 }
@@ -652,7 +683,7 @@ int ofi_join_collective(struct fid_ep *ep, fi_addr_t coll_addr,
 	if (ret)
 		goto err2;
 
-	comp_item->hdr.type = UTIL_COLL_JOIN_COMPLETE;
+	comp_item->hdr.type = UTIL_COLL_OP_COMPLETE;
 	comp_item->hdr.is_barrier = 1;
 	comp_item->comp_fn = util_coll_join_comp;
 	slist_insert_tail(&comp_item->hdr.entry, &coll_mc->work_list);
@@ -811,7 +842,7 @@ ssize_t	ofi_ep_barrier(struct fid_ep *ep, fi_addr_t coll_addr, void *context)
 	if (!comp_item)
 		return -FI_ENOMEM;
 
-	comp_item->hdr.type = UTIL_COLL_BARRIER_COMPLETE;
+	comp_item->hdr.type = UTIL_COLL_OP_COMPLETE;
 	comp_item->hdr.is_barrier = 1;
 	comp_item->comp_fn = util_coll_barrier_comp;
 	slist_insert_tail(&comp_item->hdr.entry, &coll_mc->work_list);
