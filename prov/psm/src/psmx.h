@@ -288,7 +288,7 @@ struct psmx_fid_domain {
 	 * purpose. The tag-matching functions automatically treat these bits
 	 * as 0. This field is a bit mask, with reserved bits valued as "1".
 	 */
-	uint64_t		reserved_tag_bits; 
+	uint64_t		reserved_tag_bits;
 
 	/* lock to prevent the sequence of psm_mq_ipeek and psm_mq_test be
 	 * interleaved in a multithreaded environment.
@@ -748,4 +748,3 @@ ssize_t _psmx_atomic_compwrite(struct fid_ep *ep,
 #endif
 
 #endif
-
