@@ -252,8 +252,8 @@ static int multinode_run_test()
 		multinode_init_state();
 
 		while (!state.all_completions_done ||
-				!state.all_recvs_posted ||
-				!state.all_sends_posted) {
+		       !state.all_recvs_posted ||
+		       !state.all_sends_posted) {
 			ret = multinode_post_rx();
 			if (ret)
 				return ret;
@@ -273,10 +273,8 @@ static int multinode_run_test()
 
 static void pm_job_free_res()
 {
-
-		free(pm_job.names);
-
-		free(pm_job.fi_addrs);
+	free(pm_job.names);
+	free(pm_job.fi_addrs);
 }
 
 int multinode_run_tests(int argc, char **argv)
@@ -292,13 +290,13 @@ int multinode_run_tests(int argc, char **argv)
 		printf("starting %s... ", patterns[i].name);
 		pattern = &patterns[i];
 		ret = multinode_run_test();
-		if (ret) 
+		if (ret)
 			printf("failed\n");
-		else 
+		else
 			printf("passed\n");
-		
+
 	}
-	
+
 	pm_job_free_res();
 	ft_free_res();
 	return ft_exit_code(ret);
