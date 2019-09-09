@@ -124,4 +124,4 @@ struct pattern_ops patterns[] = {
 	},
 };
 
-const int NUM_TESTS = ARRAY_SIZE(patterns);
+const int NUM_PATTERNS = ARRAY_SIZE(patterns);

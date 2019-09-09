@@ -41,7 +41,7 @@
 #define PATTERN_NO_CURRENT (-1)
 
 /* Number of patterns to test */
-extern const int NUM_TESTS;
+extern const int NUM_PATTERNS;
 
 struct pattern_ops {
 	char *name;
@@ -50,5 +50,3 @@ struct pattern_ops {
 };
 
 extern struct pattern_ops patterns[];
-
-

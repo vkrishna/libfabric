@@ -56,7 +56,7 @@
 struct pattern_ops *pattern;
 struct multinode_xfer_state state;
 
-static int multinode_setup_fabric(int argc, char **argv)
+int multinode_default_setup_fabric(int argc, char **argv)
 {
 	char my_name[FT_MAX_CTRL_MSG];
 	size_t len;
@@ -286,7 +286,7 @@ int multinode_run_tests(int argc, char **argv)
 	if (ret)
 		return ret;
 
-	for (i = 0; i < NUM_TESTS && !ret; i++) {
+	for (i = 0; i < NUM_PATTERNS && !ret; i++) {
 		printf("starting %s... ", patterns[i].name);
 		pattern = &patterns[i];
 		ret = multinode_run_test();
